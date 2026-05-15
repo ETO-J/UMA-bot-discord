@@ -1,0 +1,9 @@
+nonebot2[httpx,websockets]>=2.4.4
+nonebot-adapter-discord>=0.1.8
+nonebot-plugin-apscheduler>=0.5.0
+nonebot-plugin-localstore>=0.7.4
+nonebot-plugin-alconna>=0.60.4
+aiohttp>=3.9
+python-dotenv>=1.0
+faiss-cpu>=1.7
+sentence-transformers>=2.2

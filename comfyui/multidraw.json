@@ -1,0 +1,221 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 534351097965750,
+      "steps": 30,
+      "cfg": 6,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": [
+        "13",
+        0
+      ],
+      "positive": [
+        "100",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "74",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器1"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "(worst quality:1.4) , (low quality:1.4),(talking:1.2),(bad hand:1.4)",
+      "clip": [
+        "22",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "negative"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "13",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "多人_discord",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "13": {
+    "inputs": {
+      "ckpt_name": "waiIllustriousSDXL_v160.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Checkpoint加载器（简易）"
+    }
+  },
+  "22": {
+    "inputs": {
+      "stop_at_clip_layer": -2,
+      "clip": [
+        "13",
+        1
+      ]
+    },
+    "class_type": "CLIPSetLastLayer",
+    "_meta": {
+      "title": "设置CLIP最后一层"
+    }
+  },
+  "29": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "22",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "positive-全局"
+    }
+  },
+  "74": {
+    "inputs": {
+      "width": 1664,
+      "height": 1216,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "空Latent1"
+    }
+  },
+  "83": {
+    "inputs": {
+      "text": "monochrome, greyscale, hatching \\(texture\\), screentones,\n"
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "positive"
+    }
+  },
+  "85": {
+    "inputs": {
+      "text": "d,",
+      "clip": [
+        "22",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "positive-1"
+    }
+  },
+  "95": {
+    "inputs": {
+      "width": 904,
+      "height": 1216,
+      "x": 0,
+      "y": 0,
+      "strength": 0.8,
+      "conditioning": [
+        "85",
+        0
+      ]
+    },
+    "class_type": "ConditioningSetArea",
+    "_meta": {
+      "title": "条件采样区域"
+    }
+  },
+  "96": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "22",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "positive-2"
+    }
+  },
+  "97": {
+    "inputs": {
+      "width": 960,
+      "height": 1216,
+      "x": 704,
+      "y": 0,
+      "strength": 0.8,
+      "conditioning": [
+        "96",
+        0
+      ]
+    },
+    "class_type": "ConditioningSetArea",
+    "_meta": {
+      "title": "条件采样区域"
+    }
+  },
+  "99": {
+    "inputs": {
+      "conditioning_1": [
+        "95",
+        0
+      ],
+      "conditioning_2": [
+        "97",
+        0
+      ]
+    },
+    "class_type": "ConditioningCombine",
+    "_meta": {
+      "title": "条件合并"
+    }
+  },
+  "100": {
+    "inputs": {
+      "conditioning_1": [
+        "29",
+        0
+      ],
+      "conditioning_2": [
+        "99",
+        0
+      ]
+    },
+    "class_type": "ConditioningCombine",
+    "_meta": {
+      "title": "条件合并"
+    }
+  }
+}
