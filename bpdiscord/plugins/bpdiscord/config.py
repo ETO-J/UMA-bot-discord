@@ -18,7 +18,7 @@ for d in [DATA_DIR, IMAGES_DIR, PIXIV_IMAGES_DIR, ERROR_IMAGES_DIR, AISSETTING_D
     d.mkdir(parents=True, exist_ok=True)
 
 # === 管理员（Discord 字符串 ID）===
-ADMIN_IDS: list[str] = ["1440336869144395868"]
+ADMIN_IDS: list[str] = [""]
 
 def is_admin(user_id: str) -> bool:
     return user_id in ADMIN_IDS
@@ -106,39 +106,15 @@ ALLOWED_GUILDS: dict = {
 
 # censor allowlist — 控制垃圾消息扫描的服务器/频道（独立于自由聊天）
 ALLOWED_GUILDS_CENSOR: dict = {
-    "1452668545040126056": {  # bot测试
+    "1452668545040126056": {  # 改为你自己的服务器
         "enabled": True,
         "channels": {
-            "1452668545895895207": True,
+            "1452668545895895207": True, #改为你自己的子频道
             "1487642657114161253": True,
             "1487642691872358420": True,
         },
     },
-    "1441768620777799690": {  # sek
-        "enabled": True,
-        "channels": {
-            "1441804588662653080": True,
-            "1464639865068064957": True,
-            "1443636121463427072": True,
-            "1443633950990929951": True,
-            "1464990711014363227": True,
-            "1465016246088237188": True,
-            "1477719857654009866": True,
-        },
-    },
-    "1491483530893725856": {  # 橡皮擦
-        "enabled": True,
-        "channels": {
-            "1492064164263362560": True,
-            "1492065926730743939": True,
-            "1492066093311856752": True,
-            "1492075545108680734": True,
-            "1492075008195825825": True,
-            "1492075329714524160": True,
-            "1500157414325096559": True,
-            "1499077054589698149": True,
-        },
-    },
+
 }
 
 PRIVATE_CHAT_ENABLED: bool = True
