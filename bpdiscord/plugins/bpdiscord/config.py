@@ -25,10 +25,12 @@ def is_admin(user_id: str) -> bool:
 
 # === 用户黑名单（这些用户的消息仍存入数据库，但不会触发任何指令或自由聊天）===
 USER_BLACKLIST: list[str] = [
-"1459193006069514243",
+"1462436754102423666",
 "1268587693630160906",
+"1483176430375276635",
+"405333091599515668",
 "1268247382823403611",
-
+"650364054220832808",
                              ]
 
 def is_blacklisted(user_id: str) -> bool:
@@ -62,6 +64,15 @@ SAUCENAO_API_KEY = os.getenv("SAUCENAO_API_KEY")
 SAUCENAO_MIN_SIMILARITY = 60
 
 # === Discord 权限配置 ===
+
+
+# === 自动翻译 ===
+# 格式: {channel_id: True/False}，在对应频道自动日↔中翻译
+TRANSLATE_CHANNELS: dict[str, bool] = {
+    "1509759443141922968": True,
+}
+
+
 # 自由聊天 allowlist — 控制机器人自主回复的服务器/频道
 ALLOWED_GUILDS: dict = {
     "1452668545040126056": {  # bot测试
@@ -78,7 +89,7 @@ ALLOWED_GUILDS: dict = {
         },
     },
     "1491483530893725856": {  # 橡皮擦
-        "enabled": True,
+        "enabled": False,
         "channels": {
             "1441804588662653080": True,
             "1464639865068064957": True,
@@ -173,7 +184,7 @@ MODEL_CACHE_PATH.mkdir(parents=True, exist_ok=True)
 EMBEDDING_MODEL_NAME = "GanymedeNil/text2vec-base-chinese"
 
 # === 疲劳因子 ===
-FATIGUE_HALF_LIFE = 240
+FATIGUE_HALF_LIFE = 180
 FATIGUE_THRESHOLD_K = 3.0
 FATIGUE_STEEPNESS_N = 4.0
 FATIGUE_OBSERVATION_WINDOW = 900
@@ -192,6 +203,9 @@ KNOWLEDGE_SEARCH_K = 3
 KNOWLEDGE_SCORE_THRESHOLD = 0.3
 CHAT_MAX_TOKENS = 8192
 CHAT_TEMPERATURE = 1.0
+
+# 自由聊天消息缓冲时间（秒）：同一频道内的连续消息会拼接后再传入AI判断
+BUFFER_TIMEOUT = 15
 
 # === ComfyUI ===
 COMFYUI_DEFAULT_RESOLUTIONS = {

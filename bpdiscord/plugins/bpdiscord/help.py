@@ -7,12 +7,13 @@ help_handler = on_message(priority=2, block=False)
 
 HELP_TEXT = """【使用指南 | Command Guide】
 💬 波旁 [内容] - 与波旁对话（含记忆+联网搜索）
-🎭 今日担当 [角色] - 每日随机角色邂逅，可指定角色
+🎭 今日担当 [角色(可选)] - 每日随机角色邂逅，可指定角色
 🎨 draw [提示词] - AI绘图
 🎨🎨 multidraw [全局 AND 角色1 AND 角色2] - 多角色绘图
-🎨 高清 [开/关] - 高清绘图模式
+🎨 高清 [on/off] - 高清绘图模式
 🖼️  切换分辨率 [宽] [高] - 修改绘图尺寸
-🖼️  切换工作流 discord/anima - 修改绘图原始模型。discord为IL，anima为anima-v1-base,两者lora不通用
+🖼️  切换工作流 discord/anima/anima_v2 - 修改绘图模型和架构。
+🖼️  设置画师串 / 画师串 / 重置画师串 - Anima V2画师串管理。⚠启用多于一位画师串会导致生图速度大幅度下降！！！
 🖼️  partone / parttwo - 多人绘图区块设置
 🖼️  切换负面 / 重置负面 - 负面提示词管理
 🔹 lora列表 / 添加lora / 删除lora / 重置lora - Lora管理

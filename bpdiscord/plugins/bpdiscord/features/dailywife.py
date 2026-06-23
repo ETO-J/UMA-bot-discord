@@ -5,6 +5,7 @@ from typing import Dict
 
 from nonebot import on_message
 from nonebot.adapters.discord import Bot, MessageEvent
+from nonebot.rule import Rule
 from nonebot_plugin_alconna import UniMessage
 from nonebot.log import logger
 from pathlib import Path
@@ -34,13 +35,13 @@ DAILYWIFE_MAP = {
     "成田大进": "ナリタタイシン", "西野花": "ニシノフラワー",
     "春乌拉拉": "ハルウララ", "待兼福来": "マチカネフクキタ",
     "千明代表": "ミスターシービー", "名将怒涛": "メイショウドトウ",
-    "优秀素质": "ナイスネイチャ", "帝王光辉": "キングヘイロー",
+    "优秀素质": "ナイスネイチャ", "圣王光环": "キングヘイロー",
     "待兼诗歌剧": "マチカネタンホイザ", "目白善信": "メジロパーマー",
     "大拓太阳神": "ダイタクヘリオス", "里见光钻": "サトノダイヤモンド",
     "北部玄驹": "キタサンブラック", "目白阿尔丹": "メジロアルダン",
     "目白光明": "メジロブライ", "樱花桂冠": "サクラローレル",
-    "成田白": "ナリタトップロー", "创升": "トランセンド",
-    "谷水琴蕾": "タニノギムレット", "目白高峰": "メジロラモーヌ",
+ "创升": "トランセンド",
+ "目白高峰": "メジロラモーヌ",
     "里见皇冠": "サトノクラウン", "创世驹": "クロノジェネシス",
     "杏目": "アーモンドアイ", "秋川弥生": "秋川やよい",
     "光辉致意": "ライトハロー", "唯独爱你": "ラヴズオンリーユー",
@@ -58,15 +59,16 @@ def _get_local_images(keyword: str) -> list:
     return images
 
 
-dailywife_handler = on_message(priority=4, block=True)
+def _is_dailywife(event: MessageEvent) -> bool:
+    return event.get_plaintext().strip().startswith(("今日担当", "/今日担当"))
+
+
+dailywife_handler = on_message(priority=4, block=True, rule=Rule(_is_dailywife))
 
 
 @dailywife_handler.handle()
 async def handle_dailywife(bot: Bot, event: MessageEvent):
     raw_text = event.get_plaintext().strip()
-    if not raw_text.startswith(("今日担当", "/今日担当")):
-        await dailywife_handler.skip()
-        return
 
     user_id = event.get_user_id()
     today = datetime.date.today()

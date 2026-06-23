@@ -12,7 +12,7 @@ from ..ai.memory import memory
 from ..ai.persona import persona_manager
 from ..ai.persona.manager import handle_persona_list, handle_switch_persona
 from .. import config as _cfg
-from ..config import CHAT_DB_PATH, ALLOWED_GUILDS, is_admin
+from ..config import CHAT_DB_PATH, ALLOWED_GUILDS, is_admin, is_blacklisted
 
 # 排除 features 模块已处理的命令
 FEATURE_COMMANDS = ["draw", "/draw", "multidraw", "/multidraw",
@@ -27,6 +27,9 @@ admin_handler = on_message(priority=3, block=False)
 async def handle_admin_commands(bot: Bot, event: MessageEvent):
     raw_text = event.get_plaintext().strip()
     user_id = event.get_user_id()
+
+    if is_blacklisted(user_id):
+        return
 
     guild_id = str(event.guild_id) if hasattr(event, "guild_id") and event.guild_id else None
     channel_id = str(event.channel_id) if hasattr(event, "channel_id") else user_id

@@ -25,7 +25,8 @@ COMFYUI_OUTPUT_DIR = Path(os.getenv("COMFYUI_OUTPUT_DIR", r"C:\Users\Administrat
 COMFYUI_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 LORA_BASE_PATH = Path(os.getenv("LORA_BASE_PATH", r"C:\Users\Administrator\Documents\ComfyUI\models\loras"))
-LORA_DIRS = ["char", "gif", "pose", "style"]
+LORA_DIRS = ["char", "pose", "style"]
+LORA_ANIMA_DIRS = ["char_anima", "pose_anima", "style_anima"]
 
 IMAGE_SAVE_PATH = Path(os.getenv("IMAGE_SAVE_PATH", r"D:\civitai\线上绘图"))
 IMAGE_SAVE_PATH.mkdir(parents=True, exist_ok=True)
@@ -65,8 +66,23 @@ WORKFLOW_CONFIGS = {
         "clip_source": ["66", 0],
         "pos_node_id": "65",
         "neg_node_id": "68",
-        "supports_lora": False,
-        "lora_start_id": None,
+        "supports_lora": True,
+        "lora_start_id": 1000,
+        "lora_type": "LoraLoaderModelOnly",
+    },
+    "discord_anima_v2": {
+        "model_source": ["64", 0],
+        "clip_source": ["66", 0],
+        "pos_node_id": None,
+        "neg_node_id": "68",
+        "supports_lora": True,
+        "lora_start_id": 1000,
+        "lora_type": "LoraLoaderModelOnly",
+        "bridging_model_node": "73",
+        "bridging_positive_node": "73",
+        "prompt_pack_node": "72",
+        "prompt_field": "base_prompt",
+        "prompt_class_type": "AnimaArtistPack",
     },
 }
 
@@ -91,7 +107,7 @@ class WorkflowManager:
                     width INTEGER DEFAULT 832,
                     height INTEGER DEFAULT 1216,
                     active_loras TEXT DEFAULT '{}',
-                    workflow TEXT DEFAULT 'discord',
+                    workflow TEXT DEFAULT 'discord_anima_v2',
                     negative_prompt TEXT DEFAULT 'mosaic,low quality, bad quality, worst quality'
                 )
             ''')
@@ -105,6 +121,7 @@ class WorkflowManager:
                 "is_hd_mode": "INTEGER DEFAULT 0",
                 "part1": "TEXT DEFAULT '[832,608,0,0]'",
                 "part2": "TEXT DEFAULT '[832,608,832,0]'",
+                "artist_chain": "TEXT DEFAULT ''",
             }
             for field, definition in new_fields.items():
                 if field not in existing:
@@ -117,6 +134,7 @@ class WorkflowManager:
                     cursor.execute("UPDATE user_settings SET part1=? WHERE user_id=?", ('[832,608,0,0]', uid))
                 if not p2 or p2 == "[]":
                     cursor.execute("UPDATE user_settings SET part2=? WHERE user_id=?", ('[832,608,832,0]', uid))
+            cursor.execute("UPDATE user_settings SET workflow='discord_anima_v2' WHERE workflow='uma'")
             conn.commit()
             conn.close()
             logger.info(f"数据库初始化/升级成功: {DB_PATH}")
@@ -129,11 +147,11 @@ class WorkflowManager:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT width, height, active_loras, workflow, limit_count, used_today, last_reset_date, negative_prompt, is_hd_mode, part1, part2 FROM user_settings WHERE user_id = ?",
+            "SELECT width, height, active_loras, workflow, limit_count, used_today, last_reset_date, negative_prompt, is_hd_mode, part1, part2, artist_chain FROM user_settings WHERE user_id = ?",
             (user_id,))
         row = cursor.fetchone()
         if row:
-            width, height, loras_json, workflow, limit_count, used_today, last_reset_date, negative_prompt, is_hd_mode, part1, part2 = row
+            width, height, loras_json, workflow, limit_count, used_today, last_reset_date, negative_prompt, is_hd_mode, part1, part2, artist_chain = row
             if last_reset_date != today_str:
                 used_today = 0
                 cursor.execute("UPDATE user_settings SET used_today=0, last_reset_date=? WHERE user_id=?", (today_str, user_id))
@@ -149,9 +167,10 @@ class WorkflowManager:
                 "is_hd_mode": is_hd_mode,
                 "part1": json.loads(part1),
                 "part2": json.loads(part2),
+                "artist_chain": artist_chain or "",
             }
         else:
-            cursor.execute("INSERT INTO user_settings (user_id, last_reset_date) VALUES (?, ?)", (user_id, today_str))
+            cursor.execute("INSERT INTO user_settings (user_id, last_reset_date, workflow) VALUES (?, ?, 'discord_anima_v2')", (user_id, today_str))
             conn.commit()
             conn.close()
             return self.get_user_settings(user_id)
@@ -199,6 +218,14 @@ class WorkflowManager:
         conn.commit()
         conn.close()
 
+    def set_artist_chain(self, user_id: str, text: str):
+        self.get_user_settings(user_id)
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE user_settings SET artist_chain=? WHERE user_id=?", (text, user_id))
+        conn.commit()
+        conn.close()
+
     def set_part1(self, user_id: str, part: list):
         self.get_user_settings(user_id)
         conn = sqlite3.connect(DB_PATH)
@@ -234,17 +261,24 @@ class WorkflowManager:
             logger.error(f"加载工作流文件 {name} 失败: {e}")
             return None
 
-    def get_lora_list(self):
+    def _get_lora_dirs(self, workflow: str = None) -> list:
+        if workflow and "anima" in workflow:
+            return LORA_ANIMA_DIRS
+        return LORA_DIRS
+
+    def get_lora_list(self, workflow: str = None):
+        dirs = self._get_lora_dirs(workflow)
         lora_dict = {}
-        for sub_dir in LORA_DIRS:
+        for sub_dir in dirs:
             path = LORA_BASE_PATH / sub_dir
             if path.exists():
                 loras = [f.name for f in path.glob("**/*") if f.suffix in [".safetensors", ".ckpt"]]
                 lora_dict[sub_dir] = loras
         return lora_dict
 
-    def find_lora_path(self, name: str):
-        for sub_dir in LORA_DIRS:
+    def find_lora_path(self, name: str, workflow: str = None):
+        dirs = self._get_lora_dirs(workflow)
+        for sub_dir in dirs:
             path = LORA_BASE_PATH / sub_dir
             for f in path.glob("**/*"):
                 if name.lower() in f.name.lower():
@@ -253,8 +287,9 @@ class WorkflowManager:
 
     def add_lora(self, user_id: str, lora_name: str, weight: float):
         settings = self.get_user_settings(user_id)
+        workflow = settings.get("workflow", "discord_anima_v2")
         current_loras = settings["active_loras"]
-        real_path = self.find_lora_path(lora_name)
+        real_path = self.find_lora_path(lora_name, workflow)
         if real_path:
             file_name = os.path.basename(real_path)
             current_loras[file_name] = weight
@@ -331,50 +366,80 @@ async def generate_image(input_prompt: str, user_id: str, workflow_name: str = N
 
     config = WORKFLOW_CONFIGS.get(target_name)
     if not config:
-        config = WORKFLOW_CONFIGS["discord"]
+        config = WORKFLOW_CONFIGS["discord_anima_v2"]
 
     current_model_source = list(config["model_source"])
     current_clip_source = list(config["clip_source"])
 
     if config["supports_lora"] and active_loras:
         start_id = config["lora_start_id"]
+        lora_type = config.get("lora_type", "LoraLoader")
         for lora_name, weight in active_loras.items():
-            lora_path = wm.find_lora_path(lora_name)
+            lora_path = wm.find_lora_path(lora_name, target_name)
             if not lora_path:
                 continue
             node_id = str(start_id)
-            workflow_data[node_id] = {
-                "inputs": {
-                    "lora_name": lora_path,
-                    "strength_model": weight,
-                    "strength_clip": weight,
-                    "model": current_model_source,
-                    "clip": current_clip_source,
-                },
-                "class_type": "LoraLoader",
-                "_meta": {"title": f"DynamicLora_{lora_name}"},
-            }
-            current_model_source = [node_id, 0]
-            current_clip_source = [node_id, 1]
+            if lora_type == "LoraLoaderModelOnly":
+                workflow_data[node_id] = {
+                    "inputs": {
+                        "lora_name": lora_path,
+                        "strength_model": weight,
+                        "model": current_model_source,
+                    },
+                    "class_type": "LoraLoaderModelOnly",
+                    "_meta": {"title": f"DynamicLora_{lora_name}"},
+                }
+                current_model_source = [node_id, 0]
+            else:
+                workflow_data[node_id] = {
+                    "inputs": {
+                        "lora_name": lora_path,
+                        "strength_model": weight,
+                        "strength_clip": weight,
+                        "model": current_model_source,
+                        "clip": current_clip_source,
+                    },
+                    "class_type": "LoraLoader",
+                    "_meta": {"title": f"DynamicLora_{lora_name}"},
+                }
+                current_model_source = [node_id, 0]
+                current_clip_source = [node_id, 1]
             start_id += 1
 
     pos_node_id = config["pos_node_id"]
     neg_node_id = config["neg_node_id"]
+    bridging_model_node = config.get("bridging_model_node")
+    bridging_pos_node = config.get("bridging_positive_node")
+    prompt_pack_node = config.get("prompt_pack_node")
+
+    artist_chain = user_settings.get("artist_chain", "")
 
     for node_id, node_data in workflow_data.items():
         class_type = node_data.get("class_type")
         meta_title = node_data.get("_meta", {}).get("title", "").lower()
 
-        if class_type == "KSampler":
+        if prompt_pack_node and node_id == prompt_pack_node:
+            node_data["inputs"]["clip"] = current_clip_source
+            node_data["inputs"][config.get("prompt_field", "base_prompt")] = f"{input_prompt}"
+            node_data["inputs"]["artist_chain"] = artist_chain
+
+        if bridging_model_node and node_id == bridging_model_node:
             node_data["inputs"]["model"] = current_model_source
-            node_data["inputs"]["positive"] = [pos_node_id, 0]
-            node_data["inputs"]["negative"] = [neg_node_id, 0]
+
+        if class_type == "KSampler":
             node_data["inputs"]["seed"] = random.randint(1, 1000000000)
+            node_data["inputs"]["negative"] = [neg_node_id, 0]
+            if bridging_model_node:
+                node_data["inputs"]["model"] = [bridging_model_node, 0]
+                node_data["inputs"]["positive"] = [bridging_pos_node, 1]
+            else:
+                node_data["inputs"]["model"] = current_model_source
+                node_data["inputs"]["positive"] = [pos_node_id, 0]
 
         if class_type == "CLIPTextEncode":
             node_data["inputs"]["clip"] = current_clip_source
-            if node_id == pos_node_id or "positive" in meta_title:
-                node_data["inputs"]["text"] = f"{input_prompt}, SFW"
+            if pos_node_id and (node_id == pos_node_id or "positive" in meta_title):
+                node_data["inputs"]["text"] = f"{input_prompt}"
             elif node_id == neg_node_id or "negative" in meta_title:
                 final_neg = negative_text if negative_text else "mosaic, low quality, bad quality, worst quality"
                 node_data["inputs"]["text"] = final_neg
@@ -433,24 +498,37 @@ async def generate_multidraw_image(prompt1: str, prompt2: str, global_prompt: st
 
     if config["supports_lora"] and active_loras:
         start_id = config["lora_start_id"]
+        lora_type = config.get("lora_type", "LoraLoader")
         for lora_name, weight in active_loras.items():
-            lora_path = wm.find_lora_path(lora_name)
+            lora_path = wm.find_lora_path(lora_name, "multidraw")
             if not lora_path:
                 continue
             node_id = str(start_id)
-            workflow_data[node_id] = {
-                "inputs": {
-                    "lora_name": lora_path,
-                    "strength_model": weight,
-                    "strength_clip": weight,
-                    "model": current_model_source,
-                    "clip": current_clip_source,
-                },
-                "class_type": "LoraLoader",
-                "_meta": {"title": f"DynamicLora_{lora_name}"},
-            }
-            current_model_source = [node_id, 0]
-            current_clip_source = [node_id, 1]
+            if lora_type == "LoraLoaderModelOnly":
+                workflow_data[node_id] = {
+                    "inputs": {
+                        "lora_name": lora_path,
+                        "strength_model": weight,
+                        "model": current_model_source,
+                    },
+                    "class_type": "LoraLoaderModelOnly",
+                    "_meta": {"title": f"DynamicLora_{lora_name}"},
+                }
+                current_model_source = [node_id, 0]
+            else:
+                workflow_data[node_id] = {
+                    "inputs": {
+                        "lora_name": lora_path,
+                        "strength_model": weight,
+                        "strength_clip": weight,
+                        "model": current_model_source,
+                        "clip": current_clip_source,
+                    },
+                    "class_type": "LoraLoader",
+                    "_meta": {"title": f"DynamicLora_{lora_name}"},
+                }
+                current_model_source = [node_id, 0]
+                current_clip_source = [node_id, 1]
             start_id += 1
 
     for node_id, node_data in workflow_data.items():
@@ -555,15 +633,26 @@ async def handle_comfyui_commands(bot: Bot, event: MessageEvent):
                 f"❌ 今日配额已耗尽（{user_settings['limit_count']}/{user_settings['used_today']}）。\n每日0:00自动重置。").send(reply_message=True)
             return
         if wm.use_quota(user_id, cost):
-            new_remaining = remaining - cost
-            hd_tag = " [高清模式]" if is_hd else ""
-            await UniMessage(f"🎨{hd_tag} 今日剩余配额: {new_remaining} 次。\n正在生成中...").send(reply_message=True)
-            image_data = await generate_image(prompt, user_id)
-            if image_data:
-                await UniMessage.image(raw=image_data).send(reply_message=True)
-            else:
-                wm.refund_quota(user_id, cost)
-                await UniMessage("❌ 绘图失败，已返还配额。").send(reply_message=True)
+            refunded = False
+            try:
+                new_remaining = remaining - cost
+                hd_tag = " [高清模式]" if is_hd else ""
+                await UniMessage(f"🎨{hd_tag} 今日剩余配额: {new_remaining} 次。\n正在生成中...").send(reply_message=True)
+                image_data = await generate_image(prompt, user_id)
+                if image_data:
+                    await UniMessage.image(raw=image_data).send(reply_message=True)
+                else:
+                    wm.refund_quota(user_id, cost)
+                    refunded = True
+                    await UniMessage("❌ 绘图失败，已返还配额。").send(reply_message=True)
+            except Exception as e:
+                logger.error(f"绘图流程异常: {e}")
+                if not refunded:
+                    wm.refund_quota(user_id, cost)
+                try:
+                    await UniMessage(f"❌ 网络异常，已返还配额。").send(reply_message=True)
+                except:
+                    pass
         return
 
     # 3. Multidraw
@@ -585,14 +674,25 @@ async def handle_comfyui_commands(bot: Bot, event: MessageEvent):
             await UniMessage(f"❌ 今日配额不足（需要{cost}次，剩余{remaining}次）。").send(reply_message=True)
             return
         if wm.use_quota(user_id, cost):
-            new_remaining = remaining - cost
-            await UniMessage(f"🎨 [多角色绘图] 今日剩余配额: {new_remaining} 次。\n正在生成中...").send(reply_message=True)
-            image_data = await generate_multidraw_image(prompt1, prompt2, global_prompt, user_id)
-            if image_data:
-                await UniMessage.image(raw=image_data).send(reply_message=True)
-            else:
-                wm.refund_quota(user_id, cost)
-                await UniMessage("❌ 多角色绘图失败，已返还配额。").send(reply_message=True)
+            refunded = False
+            try:
+                new_remaining = remaining - cost
+                await UniMessage(f"🎨 [多角色绘图] 今日剩余配额: {new_remaining} 次。\n正在生成中...").send(reply_message=True)
+                image_data = await generate_multidraw_image(prompt1, prompt2, global_prompt, user_id)
+                if image_data:
+                    await UniMessage.image(raw=image_data).send(reply_message=True)
+                else:
+                    wm.refund_quota(user_id, cost)
+                    refunded = True
+                    await UniMessage("❌ 多角色绘图失败，已返还配额。").send(reply_message=True)
+            except Exception as e:
+                logger.error(f"多角色绘图流程异常: {e}")
+                if not refunded:
+                    wm.refund_quota(user_id, cost)
+                try:
+                    await UniMessage(f"❌ 网络异常，已返还配额。").send(reply_message=True)
+                except:
+                    pass
         return
 
     # 4. 切换分辨率
@@ -632,22 +732,47 @@ async def handle_comfyui_commands(bot: Bot, event: MessageEvent):
 
     # 6. Lora 列表
     if raw_text.lower() in ["lora列表", "/lora列表", "loralist"]:
-        lora_dict = wm.get_lora_list()
         user_settings = wm.get_user_settings(user_id)
+        workflow = user_settings.get("workflow", "discord")
         active_loras = user_settings.get("active_loras", {})
-        msg = "🗂️ **可用 Lora 资源库**\n"
+        lora_dict = wm.get_lora_list(workflow)
+
+        workflow_label = "Anima" if "anima" in workflow else "SDXL"
+        lines = [f"🗂️ **可用 Lora 资源库 [{workflow_label}]**"]
         if not lora_dict:
-            msg += "  (库路径为空或未找到文件)\n"
+            lines.append("  (库路径为空或未找到文件)")
         else:
-            for category, files in lora_dict.items():
-                for f in files:
-                    msg += f"  - `{f}`\n"
+            dir_labels = wm._get_lora_dirs(workflow)
+            for sub_dir in dir_labels:
+                files = lora_dict.get(sub_dir, [])
+                if files:
+                    lines.append(f"**{sub_dir}**:")
+                    for f in files:
+                        lines.append(f"  - `{f}`")
+
+        lines.append("")
         if active_loras:
-            msg += "\n✅ **[个人] 当前已挂载:**\n"
-            msg += "\n".join([f"🔗 {k} (权重: {v})" for k, v in active_loras.items()])
+            lines.append("✅ **[个人] 当前已挂载:**")
+            for k, v in active_loras.items():
+                lines.append(f"🔗 {k} (权重: {v})")
         else:
-            msg += "\n⚙️ **[个人] 当前未挂载任何 Lora**"
-        await UniMessage(msg).send()
+            lines.append("⚙️ **[个人] 当前未挂载任何 Lora**")
+
+        chunks = []
+        current = ""
+        for line in lines:
+            if len(current) + len(line) + 1 > 1000:
+                chunks.append(current.strip())
+                current = line
+            else:
+                current = current + "\n" + line if current else line
+        if current:
+            chunks.append(current.strip())
+
+        total = len(chunks)
+        for i, chunk in enumerate(chunks):
+            prefix = f"[{i + 1}/{total}] " if total > 1 else ""
+            await UniMessage(prefix + chunk).send()
         return
 
     # 7. 添加 Lora
@@ -706,13 +831,47 @@ async def handle_comfyui_commands(bot: Bot, event: MessageEvent):
         await UniMessage("🧹 [个人设置] 负面提示词已清空。").send(reply_message=True)
         return
 
+    # 11b. 设置画师串
+    if raw_text.startswith(("设置画师串", "/设置画师串", "set-artist-chain", "/set-artist-chain")):
+        content = raw_text
+        for prefix in ["/设置画师串", "设置画师串", "/set-artist-chain", "set-artist-chain"]:
+            if content.startswith(prefix):
+                content = content[len(prefix):].strip()
+                break
+        if not content:
+            await UniMessage("❌ 请输入画师串内容（支持多行/逗号分隔）。\n用法: 设置画师串 artist1, artist2, ...").send(reply_message=True)
+            return
+        wm.set_artist_chain(user_id, content)
+        await UniMessage(f"✅ [个人设置] 画师串已更新。\n当前设置: `{content}`").send(reply_message=True)
+        return
+
+    # 11c. 查看画师串
+    if raw_text.lower() in ["画师串", "/画师串", "artist-chain", "/artist-chain"]:
+        user_settings = wm.get_user_settings(user_id)
+        chain = user_settings.get("artist_chain", "")
+        if chain:
+            await UniMessage(f"🎨 **[个人] 当前画师串:**\n`{chain}`").send(reply_message=True)
+        else:
+            await UniMessage("⚙️ **[个人] 未设置画师串。\n用法: 设置画师串 artist1, artist2, ...").send(reply_message=True)
+        return
+
+    # 11d. 重置画师串
+    if raw_text.lower() in ["重置画师串", "/重置画师串", "clear-artist-chain", "/clear-artist-chain"]:
+        wm.set_artist_chain(user_id, "")
+        await UniMessage("🧹 [个人设置] 画师串已清空。").send(reply_message=True)
+        return
+
     # 12. 切换工作流
     if raw_text.startswith(("切换工作流", "/切换工作流")):
         content = raw_text.replace("/切换工作流", "").replace("切换工作流", "").strip().lower()
         if content in ["anima", "discord_anima"]:
             wm.set_user_setting(user_id, "workflow", "discord_anima")
             wm.set_user_setting(user_id, "is_hd_mode", 0)
-            await UniMessage("✅ 已切换到 Anima 工作流 (UNet + CLIP + VAE 分离架构，不支持 Lora)。高清模式已自动关闭。").send()
+            await UniMessage("✅ 已切换到 Anima 工作流（基础版，仅文本编码）。提示：可用 `切换工作流 anima_v2` 切换到带画师融合的高级版。").send()
+        elif content in ["anima_v2", "anima2", "discord_anima_v2"]:
+            wm.set_user_setting(user_id, "workflow", "discord_anima_v2")
+            wm.set_user_setting(user_id, "is_hd_mode", 0)
+            await UniMessage("✅ 已切换到 Anima V2 工作流（含 AnimaArtistPack 多画师融合 + Cross-Attn）。请使用 `设置画师串` 配置画师串。\n ⚠启用多于一位画师串会导致生图速度大幅度下降！！！").send()
         elif content in ["discord", "default", "默认"]:
             wm.set_user_setting(user_id, "workflow", "discord")
             await UniMessage("✅ 已切换到默认 Discord 工作流 (SDXL + Checkpoint)。").send()
@@ -721,7 +880,7 @@ async def handle_comfyui_commands(bot: Bot, event: MessageEvent):
             wm.set_user_setting(user_id, "is_hd_mode", 0)
             await UniMessage("✅ 已切换到高清工作流（图生图放大+超分管线）。高清模式已自动关闭，请使用 切换分辨率 调整尺寸。").send()
         else:
-            await UniMessage("可用工作流:\n  `anima` - Anima UNet 架构 (qwen_vae + anima_baseV10)\n  `discord` / `默认` - 标准 SDXL Checkpoint\n  `高清` - 图生图高清修复").send(reply_message=True)
+            await UniMessage("可用工作流:\n  `anima` - Anima 基础版（纯文本编码）\n  `anima_v2` - Anima 高级版（画师融合 + Cross-Attn）【默认】\n  `discord` / 旧版模型 SDXL Checkpoint\n  `高清` - 图生图高清修复").send(reply_message=True)
         return
 
     # 13. 高清模式

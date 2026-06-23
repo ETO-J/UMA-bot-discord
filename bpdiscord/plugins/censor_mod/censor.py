@@ -143,11 +143,11 @@ async def handle_message(bot: DiscordBot, event: MessageEvent):
     if condition1:
         logger.info(f"用户 {user_id} 在6s内发送消息到 {len(recent_channels)} 个不同频道")
 
-    condition2 = 'http' or 'discord' in plain_text.lower()
+    condition2 = 'http' in plain_text.lower() or 'discord' in plain_text.lower()
     if condition2:
         logger.info(f"用户 {user_id} 的消息包含链接: {plain_text[:50]}...")
 
-    if condition1 and condition2:
+    if condition1: #and condition2:
         logger.info(f"触发垃圾消息检测，用户 {user_id} 同时满足多频道和链接条件，启动AI审核")
         is_spam = True
         if is_spam:

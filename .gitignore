@@ -181,4 +181,14 @@ pixiv_images/
 # Node.js (if any)
 node_modules/
 
+# Webapp binaries and logs
+webapp/cloudflared.exe
+webapp/*.log
+
+# Webapp Python cache
+webapp/__pycache__/
+webapp/routers/__pycache__/
+webapp/schemas/__pycache__/
+webapp/services/__pycache__/
+
 # End of https://www.toptal.com/developers/gitignore/api/python

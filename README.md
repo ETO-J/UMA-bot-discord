@@ -12,6 +12,7 @@
 | 人设切换 | 多种 AI 角色人格切换 |
 | 内容审核 | 垃圾消息检测、用户黑名单、每日配额管理 |
 | 知识管理 | Tkinter GUI 工具管理 FAISS 知识库 |
+| Web UI | 浏览器端 ComfyUI AI 绘图界面，支持 Discord OAuth2 登录 |
 
 ## 项目结构
 
@@ -19,19 +20,45 @@
 ├── bot.py                    # 启动入口
 ├── bpdiscord/
 │   └── plugins/bpdiscord/    # 核心插件
-│       ├── ai/               #   AI 对话模块
+│       ├── ai/               #   AI 对话模块（含自动翻译）
 │       ├── features/         #   功能模块 (绘图、今日担当)
 │       ├── admin/            #   管理员命令
 │       ├── config.py         #   统一配置
 │       └── help.py           #   帮助信息
+│   └── plugins/censor_mod/   # 内容审核模块
 ├── comfyui/                  # ComfyUI 工作流 JSON 模板
+├── webapp/                   # Web UI (FastAPI + 前端)
+│   ├── main.py               #   FastAPI 入口
+│   ├── routers/              #   API 路由
+│   ├── schemas/              #   请求/响应模型
+│   ├── services/             #   业务逻辑服务
+│   └── static/               #   前端静态资源
 ├── data/
 │   ├── aisetting/            # AI 人设文件
 │   └── knowledge_db/         # FAISS 知识库文本
+├── docs/                     # 用户文档 (中/英/日)
 ├── knowledge_manager.py      # 知识库管理 GUI
 ├── pyproject.toml
 └── requirements.txt
 ```
+
+## Web UI
+
+Web UI 提供浏览器端 AI 绘图界面，支持 Discord OAuth2 登录认证。
+
+### 安装依赖
+
+```bash
+pip install -r webapp/requirements.txt
+```
+
+### 启动
+
+```bash
+uvicorn webapp.main:app --host 0.0.0.0 --port 8000
+```
+
+Nginx 配置文件位于 `webapp/nginx/`，可用于生产环境部署。
 
 ## 快速开始
 
