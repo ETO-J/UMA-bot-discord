@@ -23,7 +23,16 @@ IMAGE_SAVE_PATH.mkdir(parents=True, exist_ok=True)
 
 DB_DIR = DATA_DIR / "comfyuisetting"
 DB_PATH = DB_DIR / "user_settings.db"
+TASK_IMAGE_DIR = DB_DIR / "task_images"
+TASK_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 WORKFLOW_DIR = COMFYUI_DIR
+
+VIDEO_RESOLUTIONS = {
+    "480p": {"portrait": (480, 640), "square": (512, 512), "landscape": (640, 480)},
+    "720p": {"portrait": (720, 1280), "square": (768, 768), "landscape": (1280, 720)},
+}
+VIDEO_BASE_COST = {"480p": 250, "720p": 500}
+VIDEO_FPS = 16
 
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
@@ -86,5 +95,23 @@ WORKFLOW_CONFIGS = {
         "prompt_pack_node": "72",
         "prompt_field": "base_prompt",
         "prompt_class_type": "AnimaArtistPack",
+    },
+    "webui_video": {
+        "clip_source": ["84", 0],
+        "pos_node_id": "93",
+        "neg_node_id": "89",
+        "supports_lora": False,
+        "video_node_id": "134",
+        "start_image_node_id": "97",
+        "end_image_node_id": "135",
+        "lora_high_node_id": "101",
+        "lora_low_node_id": "102",
+        "high_chain_source": ["117", 0],
+        "low_chain_source": ["118", 0],
+        "high_chain_target": "104",
+        "low_chain_target": "103",
+        "ksampler_ids": ["86", "85"],
+        "video_node_class_first": "WanImageToVideo",
+        "video_node_class_both": "WanFirstLastFrameToVideo",
     },
 }

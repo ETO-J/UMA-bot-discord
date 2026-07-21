@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bourbon Webui</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -31,10 +32,11 @@
       <select id="sel-workflow">
         <option value="discord_anima_v2" data-i18n="workflowAnimaV2">Anima V2 (画师融合)</option>
         <option value="multidraw" data-i18n="workflowMultidraw">多角色合成 (Multidraw)</option>
+        <option value="webui_video" data-i18n="workflowVideo">视频生成 (Wan2.2)</option>
       </select>
     </div>
 
-    <div class="section">
+    <div class="section" id="section-resolution">
       <label class="label" data-i18n="resolution">分辨率</label>
       <div class="res-grid">
         <button class="res-btn active" data-res="1">竖屏<br>832×1216</button>
@@ -108,7 +110,65 @@
       </div>
     </div>
 
-    <div class="section">
+    <div id="fields-video" style="display:none">
+      <div class="section">
+        <div class="label-row">
+          <label class="label" data-i18n="prompt">提示词</label>
+          <button class="btn-expand" data-target="txt-video-prompt" data-i18n-title="expandTitle">⤡</button>
+        </div>
+        <textarea id="txt-video-prompt" rows="3" data-i18n-placeholder="promptPlaceholder" placeholder="输入提示词..."></textarea>
+      </div>
+      <div class="section">
+        <label class="label" data-i18n="videoFirstFrame">首帧图像</label>
+        <div class="video-drop-zone" id="video-first-drop">
+          <input type="file" id="video-first-input" accept="image/*" hidden>
+          <img id="video-first-preview" class="video-preview-img" style="display:none">
+          <span id="video-first-placeholder" class="video-drop-text" data-i18n="videoDropHint">点击或拖拽上传首帧</span>
+        </div>
+      </div>
+      <div class="section">
+        <label class="label" data-i18n="videoLastFrame">尾帧图像（可选）</label>
+        <div class="video-drop-zone" id="video-last-drop">
+          <input type="file" id="video-last-input" accept="image/*" hidden>
+          <img id="video-last-preview" class="video-preview-img" style="display:none">
+          <span id="video-last-placeholder" class="video-drop-text" data-i18n="videoDropHintOptional">点击或拖拽上传尾帧（可选）</span>
+        </div>
+      </div>
+      <div class="section">
+        <label class="label" data-i18n="videoQuality">画质</label>
+        <div class="res-grid">
+          <button class="quality-btn active" data-quality="480p">480p</button>
+          <button class="quality-btn" data-quality="720p">720p</button>
+        </div>
+      </div>
+      <div class="section">
+        <label class="label" data-i18n="videoDuration">时长</label>
+        <select id="sel-video-duration">
+          <option value="1">1s</option>
+          <option value="2">2s</option>
+          <option value="3">3s</option>
+          <option value="4">4s</option>
+          <option value="5" selected>5s</option>
+          <option value="6">6s</option>
+        </select>
+      </div>
+      <div class="section">
+        <span class="label" id="video-cost-display" style="color:var(--yellow);font-size:13px"></span>
+      </div>
+      <div class="section">
+        <label class="label">
+          <input type="checkbox" id="chk-video-lora" checked>
+          <span data-i18n="videoEnhance">动态增强</span>
+        </label>
+        <div class="lora-strength-row" id="video-lora-strength-row">
+          <span data-i18n="videoEnhanceStrength" style="font-size:12px;color:var(--fg2)">强度</span>
+          <input type="range" id="rng-video-lora" min="0" max="1" step="0.05" value="0.7">
+          <input type="number" id="num-video-lora" value="0.70" min="0" max="1" step="0.05" style="width:55px">
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="section-negative">
       <div class="label-row">
         <label class="label" data-i18n="negativePrompt">负面提示词</label>
         <button class="btn-expand" data-target="txt-negative" data-i18n-title="expandTitle">⤡</button>
@@ -124,7 +184,16 @@
         <label class="label" data-i18n="seed">种子</label>
         <input type="number" id="txt-seed" value="-1" min="-1">
       </div>
-      <div class="section">
+      <div id="adv-video-fields" style="display:none">
+        <div class="section">
+          <div class="label-row">
+            <label class="label" data-i18n="negativePrompt">负面提示词</label>
+            <button class="btn-expand" data-target="txt-video-negative" data-i18n-title="expandTitle">⤡</button>
+          </div>
+          <textarea id="txt-video-negative" rows="2" data-i18n-placeholder="videoNegPlaceholder" placeholder="留空使用工作流默认"></textarea>
+        </div>
+      </div>
+      <div class="section adv-image-only">
         <label class="label" data-i18n="sampler">采样器</label>
         <select id="sel-sampler">
           <option value="" data-i18n="samplerDefault">使用工作流默认</option>
@@ -142,7 +211,7 @@
           <option value="ddim">ddim</option>
         </select>
       </div>
-      <div class="section">
+      <div class="section adv-image-only">
         <label class="label" data-i18n="scheduler">调度器</label>
         <select id="sel-scheduler">
           <option value="" data-i18n="schedulerDefault">使用工作流默认</option>
@@ -155,15 +224,7 @@
           <option value="beta">beta</option>
         </select>
       </div>
-      <div class="section">
-        <label class="label" data-i18n="steps">步数</label>
-        <input type="number" id="txt-steps" value="" min="1" max="100" data-i18n-placeholder="stepsPlaceholder" placeholder="使用工作流默认">
-      </div>
-      <div class="section">
-        <label class="label" data-i18n="cfg">CFG</label>
-        <input type="number" id="txt-cfg" value="" min="1" max="30" step="0.5" data-i18n-placeholder="cfgPlaceholder" placeholder="使用工作流默认">
-      </div>
-      <div class="section">
+      <div class="section adv-image-only" id="section-lora-btn">
         <button id="btn-open-lora" class="adv-toggle" data-i18n="loraManage">管理 LoRA ▸</button>
       </div>
     </div>
@@ -175,6 +236,7 @@
     <div id="preview-area">
       <div id="preview-placeholder" data-i18n="waiting">等待生成...</div>
       <img id="preview-img" src="" alt="" style="display:none">
+      <video id="preview-video" src="" controls style="display:none;max-width:100%;max-height:100%"></video>
       <div id="preview-spinner" class="spinner" style="display:none"></div>
       <div id="preview-status" class="status-text"></div>
     </div>
@@ -184,10 +246,7 @@
     <div class="section" style="margin-bottom:8px">
       <div class="label-row">
         <label class="label" data-i18n="history">生成历史</label>
-        <div>
-          <button id="btn-expand-panel" class="btn-expand" data-i18n-title="expandTitle" title="放大/还原">⤡</button>
-          <button id="btn-refresh-history" class="btn-small" style="margin-left:4px" data-i18n="historyRefresh">刷新</button>
-        </div>
+        <button id="btn-refresh-history" class="btn-small" data-i18n="historyRefresh">刷新</button>
       </div>
     </div>
     <div id="task-list"></div>
@@ -210,8 +269,8 @@
   </div>
 </div>
 
-    <script src="/js/i18n.js?v=9"></script>
-    <script src="/js/api.js?v=9"></script>
-    <script src="/js/app.js?v=9"></script>
+    <script src="/js/i18n.js?v=13"></script>
+    <script src="/js/api.js?v=13"></script>
+    <script src="/js/app.js?v=13"></script>
 </body>
 </html>

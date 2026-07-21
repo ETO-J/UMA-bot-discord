@@ -50,12 +50,39 @@ const API = {
     });
   },
 
+  async videoAsync(prompt, startImage, endImage, quality, duration, orientation, loraEnabled, loraStrength, negativePrompt, advanced = {}) {
+    const body = {
+      prompt,
+      start_image: startImage,
+      end_image: endImage || null,
+      quality,
+      duration,
+      orientation,
+      lora_enabled: loraEnabled,
+      lora_strength: loraStrength,
+      negative_prompt: negativePrompt || null,
+      ...advanced,
+    };
+    Object.keys(body).forEach(k => {
+      if (body[k] === "" || body[k] === null || body[k] === undefined) delete body[k];
+    });
+    return this._json("/video/async", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+
   async getTask(taskId) {
     return this._json(`/task/${taskId}`);
   },
 
   async getTaskImage(taskId) {
     return this._blob(`/task/${taskId}/image`);
+  },
+
+  async getTaskVideo(taskId) {
+    return this._blob(`/task/${taskId}/video`);
   },
 
   async listTasks() {

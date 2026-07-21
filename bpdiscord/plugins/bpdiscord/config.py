@@ -18,7 +18,7 @@ for d in [DATA_DIR, IMAGES_DIR, PIXIV_IMAGES_DIR, ERROR_IMAGES_DIR, AISSETTING_D
     d.mkdir(parents=True, exist_ok=True)
 
 # === 管理员（Discord 字符串 ID）===
-ADMIN_IDS: list[str] = [""]
+ADMIN_IDS: list[str] = ["1440336869144395868"]
 
 def is_admin(user_id: str) -> bool:
     return user_id in ADMIN_IDS
@@ -70,6 +70,8 @@ SAUCENAO_MIN_SIMILARITY = 60
 # 格式: {channel_id: True/False}，在对应频道自动日↔中翻译
 TRANSLATE_CHANNELS: dict[str, bool] = {
     "1509759443141922968": True,
+    # opendraw_freechat
+    "1525713167584465067": True,
 }
 
 
@@ -81,6 +83,13 @@ ALLOWED_GUILDS: dict = {
             "1452668545895895207": True,
         },
     },
+"1525712372306677991": {  # opendraw
+        "enabled": False,
+        "channels": {
+            "1525713167584465067": True,
+        },
+    },
+
     "1441768620777799690": {  # sek
         "enabled": False,
         "channels": {
@@ -106,12 +115,32 @@ ALLOWED_GUILDS: dict = {
 
 # censor allowlist — 控制垃圾消息扫描的服务器/频道（独立于自由聊天）
 ALLOWED_GUILDS_CENSOR: dict = {
-    "1452668545040126056": {  # 改为你自己的服务器
+"1452668545040126056": {
         "enabled": True,
         "channels": {
-            "1452668545895895207": True, #改为你自己的子频道
+            "1452668545895895207": True,
             "1487642657114161253": True,
             "1487642691872358420": True,
+        },
+    },
+"1525712372306677991": {  # opendraw
+        "enabled": True,
+        "channels": {
+            "1525717884733624430": True,
+        },
+    },
+# sek
+"1441768620777799690": {
+        "enabled": True,
+        "channels": {
+            "1522580981243056318": True,
+        },
+    },
+# 橡皮擦
+"1491483530893725856": {
+        "enabled": True,
+        "channels": {
+            "1522781674377842699": True,
         },
     },
 

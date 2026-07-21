@@ -85,7 +85,7 @@
   "67": {
     "inputs": {
       "seed": 341615360003757,
-      "steps": 30,
+      "steps": 20,
       "cfg": 4,
       "sampler_name": "er_sde",
       "scheduler": "simple",

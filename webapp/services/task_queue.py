@@ -1,10 +1,21 @@
 import asyncio
 import uuid
 import time
+import sqlite3
+import threading
 import logging
 from dataclasses import dataclass
 
+from config import DB_PATH, TASK_IMAGE_DIR
+
 logger = logging.getLogger(__name__)
+
+_TASK_COLUMNS = (
+    "task_id, status, created_at, prompt, workflow, prompt1, prompt2, "
+    "global_prompt, user_id, image_filename, error, seed, "
+    "sampler_name, scheduler, steps, cfg, output_type"
+)
+_LOAD_LIMIT = 500
 
 
 @dataclass
@@ -26,13 +37,145 @@ class Task:
     scheduler: str | None = None
     steps: int | None = None
     cfg: float | None = None
+    output_type: str = "image"
 
 
 class TaskQueue:
     def __init__(self):
         self._tasks: dict[str, Task] = {}
         self._lock = asyncio.Lock()
+        self._db_lock = threading.RLock()
+        self._conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self.cleanup_age = 3600
+        self._init_db()
+
+    def _init_db(self):
+        with self._db_lock:
+            cursor = self._conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    task_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    prompt TEXT DEFAULT '',
+                    workflow TEXT,
+                    prompt1 TEXT,
+                    prompt2 TEXT,
+                    global_prompt TEXT,
+                    user_id TEXT DEFAULT 'local_user',
+                    image_filename TEXT,
+                    error TEXT,
+                    seed INTEGER,
+                    sampler_name TEXT,
+                    scheduler TEXT,
+                    steps INTEGER,
+                    cfg REAL,
+                    output_type TEXT DEFAULT 'image'
+                )
+            """)
+            cursor.execute("PRAGMA table_info(tasks)")
+            existing_cols = [col[1] for col in cursor.fetchall()]
+            if "output_type" not in existing_cols:
+                cursor.execute("ALTER TABLE tasks ADD COLUMN output_type TEXT DEFAULT 'image'")
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, created_at DESC)"
+            )
+            self._conn.commit()
+
+    @staticmethod
+    def _row_to_task(row) -> Task:
+        return Task(
+            task_id=row["task_id"],
+            status=row["status"],
+            created_at=row["created_at"],
+            prompt=row["prompt"] or "",
+            workflow=row["workflow"],
+            prompt1=row["prompt1"],
+            prompt2=row["prompt2"],
+            global_prompt=row["global_prompt"],
+            user_id=row["user_id"],
+            image_filename=row["image_filename"],
+            error=row["error"],
+            seed=row["seed"],
+            sampler_name=row["sampler_name"],
+            scheduler=row["scheduler"],
+            steps=row["steps"],
+            cfg=row["cfg"],
+            output_type=row["output_type"] or "image",
+        )
+
+    def _persist_task(self, task: Task):
+        with self._db_lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                f"INSERT OR REPLACE INTO tasks ({_TASK_COLUMNS}) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    task.task_id, task.status, task.created_at, task.prompt,
+                    task.workflow, task.prompt1, task.prompt2, task.global_prompt,
+                    task.user_id, task.image_filename, task.error, task.seed,
+                    task.sampler_name, task.scheduler, task.steps, task.cfg,
+                    task.output_type,
+                ),
+            )
+            self._conn.commit()
+
+    def _delete_from_db(self, task_id: str):
+        with self._db_lock:
+            cursor = self._conn.cursor()
+            cursor.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
+            self._conn.commit()
+
+    def _save_image_to_disk(self, task: Task):
+        if not task.image_bytes:
+            return
+        path = TASK_IMAGE_DIR / f"{task.task_id}.png"
+        try:
+            path.write_bytes(task.image_bytes)
+            task.image_filename = path.name
+        except Exception as e:
+            logger.error("Failed to persist task image %s: %s", task.task_id, e)
+
+    def _read_image_from_disk(self, task_id: str) -> bytes | None:
+        path = TASK_IMAGE_DIR / f"{task_id}.png"
+        if path.exists():
+            try:
+                return path.read_bytes()
+            except Exception as e:
+                logger.error("Failed to read task image %s: %s", task_id, e)
+        return None
+
+    def _delete_image_from_disk(self, task_id: str):
+        path = TASK_IMAGE_DIR / f"{task_id}.png"
+        if path.exists():
+            try:
+                path.unlink()
+            except Exception as e:
+                logger.warning("Failed to delete task image %s: %s", task_id, e)
+
+    async def load_persisted_tasks(self):
+        """Load tasks from DB on startup. Mark incomplete tasks as failed."""
+        with self._db_lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                f"SELECT {_TASK_COLUMNS} FROM tasks ORDER BY created_at DESC LIMIT ?",
+                (_LOAD_LIMIT,),
+            )
+            rows = cursor.fetchall()
+        loaded = 0
+        async with self._lock:
+            for row in rows:
+                task = self._row_to_task(row)
+                if task.status in ("queued", "processing"):
+                    task.status = "failed"
+                    task.error = task.error or "Server restarted"
+                    self._persist_task(task)
+                self._tasks[task.task_id] = task
+                loaded += 1
+        logger.info("Loaded %d persisted tasks", loaded)
 
     async def create_task(
         self,
@@ -47,6 +190,7 @@ class TaskQueue:
         scheduler: str | None = None,
         steps: int | None = None,
         cfg: float | None = None,
+        output_type: str = "image",
     ) -> Task:
         task = Task(
             task_id=str(uuid.uuid4())[:8],
@@ -63,22 +207,55 @@ class TaskQueue:
             scheduler=scheduler,
             steps=steps,
             cfg=cfg,
+            output_type=output_type,
         )
         async with self._lock:
             self._tasks[task.task_id] = task
+        self._persist_task(task)
         return task
 
     async def get_task(self, task_id: str) -> Task | None:
-        return self._tasks.get(task_id)
+        async with self._lock:
+            if task_id in self._tasks:
+                return self._tasks[task_id]
+        with self._db_lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                f"SELECT {_TASK_COLUMNS} FROM tasks WHERE task_id=?",
+                (task_id,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        task = self._row_to_task(row)
+        async with self._lock:
+            self._tasks.setdefault(task_id, task)
+        return task
 
     async def update_task(self, task_id: str, **kwargs):
         async with self._lock:
-            if task_id in self._tasks:
-                for key, value in kwargs.items():
-                    setattr(self._tasks[task_id], key, value)
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            for key, value in kwargs.items():
+                setattr(task, key, value)
+            if kwargs.get("status") == "completed" and task.image_bytes:
+                self._save_image_to_disk(task)
+            self._persist_task(task)
+
+    async def get_image_bytes(self, task_id: str) -> bytes | None:
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if task:
+                if task.status != "completed":
+                    return None
+                if task.image_bytes:
+                    return task.image_bytes
+        return self._read_image_from_disk(task_id)
 
     async def cleanup(self):
         now = time.time()
+        to_remove = []
         async with self._lock:
             to_remove = [
                 tid
@@ -87,14 +264,35 @@ class TaskQueue:
             ]
             for tid in to_remove:
                 del self._tasks[tid]
-            if to_remove:
-                logger.info("Cleaned up %d old tasks", len(to_remove))
+        for tid in to_remove:
+            self._delete_from_db(tid)
+            self._delete_image_from_disk(tid)
+        if to_remove:
+            logger.info("Cleaned up %d old tasks", len(to_remove))
 
     async def get_all_tasks(self) -> list[Task]:
-        return list(self._tasks.values())
+        async with self._lock:
+            return list(self._tasks.values())
 
     async def get_user_tasks(self, user_id: str) -> list[Task]:
-        return [t for t in self._tasks.values() if t.user_id == user_id]
+        async with self._lock:
+            mem_tasks = [t for t in self._tasks.values() if t.user_id == user_id]
+        if mem_tasks:
+            return mem_tasks
+        with self._db_lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                f"SELECT {_TASK_COLUMNS} FROM tasks WHERE user_id=? ORDER BY created_at DESC LIMIT 100",
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+        tasks = []
+        async with self._lock:
+            for row in rows:
+                task = self._row_to_task(row)
+                self._tasks.setdefault(task.task_id, task)
+                tasks.append(task)
+        return tasks
 
 
 task_queue = TaskQueue()

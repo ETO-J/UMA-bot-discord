@@ -1,4 +1,4 @@
-"""自动翻译模块 — 指定频道内日↔中互译"""
+"""自动翻译模块 — 指定频道内中/英/日三语互译"""
 from nonebot import on_message
 from nonebot.adapters.discord import Bot, MessageEvent
 from nonebot_plugin_alconna import UniMessage
@@ -10,32 +10,39 @@ from ..config import (
     is_blacklisted, is_admin,
 )
 
+LANG_EMOJI = {
+    "zh": "中文",
+    "en": "English",
+    "ja": "日本語",
+}
 
-def _contains_japanese(text: str) -> bool:
-    """简单启发式：含假名即判日文"""
+
+def _has_text_content(text: str) -> bool:
+    """检查是否包含任何中/英/日文字符"""
     for ch in text:
         cp = ord(ch)
-        if 0x3040 <= cp <= 0x309F:
+        if 0x3040 <= cp <= 0x309F:   # 平假名
             return True
-        if 0x30A0 <= cp <= 0x30FF:
+        if 0x30A0 <= cp <= 0x30FF:   # 片假名
+            return True
+        if 0x4E00 <= cp <= 0x9FFF:   # CJK 汉字
+            return True
+        if 0x0041 <= cp <= 0x005A:   # A-Z
+            return True
+        if 0x0061 <= cp <= 0x007A:   # a-z
             return True
     return False
 
 
-def _contains_chinese(text: str) -> bool:
-    for ch in text:
-        cp = ord(ch)
-        if 0x4E00 <= cp <= 0x9FFF:
-            return True
-    return False
-
-
-async def _translate(text: str) -> str | None:
-    """调用 DeepSeek 检测语种并翻译"""
+async def _translate(text: str) -> dict | None:
+    """调用 DeepSeek 检测语种并翻译为另外两种语言"""
     prompt = (
-        "你是一个翻译助手。请判断以下文本是日文还是中文："
-        "如果是日文，翻译为简体中文；如果是中文，翻译为日文。"
-        "只输出翻译结果，不要任何解释或前缀。\n"
+        "你是一个翻译助手。请先判断以下文本的语言（只能是 zh / en / ja 之一），"
+        "然后将其翻译为另外两种语言。\n"
+        "严格按以下格式输出，每行一条，不要任何解释或多余内容：\n"
+        "source: <zh|en|ja>\n"
+        "<目标语言标识>: <译文>\n"
+        "<另一个目标语言标识>: <译文>\n\n"
         f"文本：{text}"
     )
 
@@ -43,13 +50,25 @@ async def _translate(text: str) -> str | None:
         response = await deepseek_client.chat.completions.create(
             model=DEEPSEEK_CHAT_MODEL,
             messages=[
-                {"role": "system", "content": "你是一个翻译助手，只输出译文，不要说任何多余的话。"},
+                {"role": "system", "content": "你是一个翻译助手，严格按指定格式输出，不要说任何多余的话。"},
                 {"role": "user", "content": prompt},
             ],
             max_tokens=2048,
             temperature=0.3,
         )
-        result = response.choices[0].message.content.strip()
+        raw = response.choices[0].message.content.strip()
+        result = {}
+        for line in raw.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if ":" in line:
+                key, _, val = line.partition(":")
+                key, val = key.strip(), val.strip()
+                if key == "source":
+                    result["source"] = val
+                elif key in LANG_EMOJI:
+                    result[key] = val
         return result if result else None
     except Exception as e:
         logger.error(f"翻译失败: {e}")
@@ -80,16 +99,23 @@ async def handle_translate(bot: Bot, event: MessageEvent):
         await translate_handler.skip()
         return
 
-    # 快速预检：不含任何 CJK 字符则跳过
-    if not _contains_japanese(plain_text) and not _contains_chinese(plain_text):
+    # 快速预检：不含任何中/英/日文字符则跳过
+    if not _has_text_content(plain_text):
         await translate_handler.skip()
         return
 
     logger.info(f"翻译频道【{channel_id}】收到消息，启动翻译: {plain_text[:50]}...")
 
-    translation = await _translate(plain_text)
-    if translation and translation != plain_text:
-        await UniMessage(f"🌐 翻译：{translation}").send(reply_message=True)
-        logger.info(f"翻译结果: {translation[:100]}...")
+    result = await _translate(plain_text)
+    if result and "source" in result:
+        source = result["source"]
+        source_name = LANG_EMOJI.get(source, source)
+        lines = [f"🌐 翻译（{source_name} → 其余语言）"]
+        for lang, label in LANG_EMOJI.items():
+            if lang != source and lang in result:
+                lines.append(f"**{label}**: {result[lang]}")
+        if len(lines) > 1:
+            await UniMessage("\n".join(lines)).send(reply_message=True)
+            logger.info(f"翻译结果: {result}")
     else:
-        logger.info("翻译结果与原文相同或为空，跳过发送")
+        logger.info("翻译解析失败或为空，跳过发送")

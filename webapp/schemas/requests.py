@@ -21,6 +21,19 @@ class MultidrawRequest(BaseModel):
     cfg: float | None = None
 
 
+class VideoRequest(BaseModel):
+    prompt: str
+    start_image: str
+    end_image: str | None = None
+    quality: str = "480p"
+    duration: int = Field(default=5, ge=1, le=6)
+    orientation: str = "portrait"
+    lora_enabled: bool = True
+    lora_strength: float = Field(default=0.7, ge=0.0, le=1.0)
+    seed: int | None = None
+    negative_prompt: str | None = None
+
+
 class ResolutionRequest(BaseModel):
     width: int = Field(ge=64, le=8192)
     height: int = Field(ge=64, le=8192)
@@ -65,6 +78,7 @@ class TaskResponse(BaseModel):
     scheduler: str | None = None
     steps: int | None = None
     cfg: float | None = None
+    output_type: str = "image"
 
 
 class QuotaResponse(BaseModel):

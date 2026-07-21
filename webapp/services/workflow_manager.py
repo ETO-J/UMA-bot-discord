@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import logging
+import threading
 from pathlib import Path
 
 from config import (
@@ -20,6 +21,11 @@ logger = logging.getLogger(__name__)
 class WorkflowManager:
     def __init__(self):
         self._ensure_dir()
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._init_db()
 
     def _ensure_dir(self):
@@ -28,167 +34,190 @@ class WorkflowManager:
 
     def _init_db(self):
         try:
-            conn = sqlite3.connect(str(DB_PATH))
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS user_settings (
-                    user_id TEXT PRIMARY KEY,
-                    width INTEGER DEFAULT 832,
-                    height INTEGER DEFAULT 1216,
-                    active_loras TEXT DEFAULT '{}',
-                    workflow TEXT DEFAULT 'discord_anima_v2',
-                    negative_prompt TEXT DEFAULT 'mosaic,low quality, bad quality, worst quality'
-                )
-            """)
-            cursor.execute("PRAGMA table_info(user_settings)")
-            existing = [col[1] for col in cursor.fetchall()]
-            new_fields = {
-                "limit_count": "INTEGER DEFAULT 50",
-                "used_today": "INTEGER DEFAULT 0",
-                "last_reset_date": "TEXT DEFAULT ''",
-                "negative_prompt": "TEXT DEFAULT 'mosaic,low quality, bad quality, worst quality'",
-                "is_hd_mode": "INTEGER DEFAULT 0",
-                "part1": "TEXT DEFAULT '[832,608,0,0]'",
-                "part2": "TEXT DEFAULT '[832,608,832,0]'",
-                "artist_chain": "TEXT DEFAULT ''",
-            }
-            for field, definition in new_fields.items():
-                if field not in existing:
-                    logger.info("DB upgrade: adding column %s", field)
-                    cursor.execute(f"ALTER TABLE user_settings ADD COLUMN {field} {definition}")
-            cursor.execute("SELECT user_id, part1, part2 FROM user_settings")
-            for row in cursor.fetchall():
-                uid, p1, p2 = row
-                if not p1 or p1 == "[]":
-                    cursor.execute("UPDATE user_settings SET part1=? WHERE user_id=?", ("[832,608,0,0]", uid))
-                if not p2 or p2 == "[]":
-                    cursor.execute("UPDATE user_settings SET part2=? WHERE user_id=?", ("[832,608,832,0]", uid))
-            cursor.execute("UPDATE user_settings SET workflow='discord_anima_v2' WHERE workflow='uma'")
-            conn.commit()
-            conn.close()
+            with self._lock:
+                cursor = self._conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS user_settings (
+                        user_id TEXT PRIMARY KEY,
+                        width INTEGER DEFAULT 832,
+                        height INTEGER DEFAULT 1216,
+                        active_loras TEXT DEFAULT '{}',
+                        workflow TEXT DEFAULT 'discord_anima_v2',
+                        negative_prompt TEXT DEFAULT 'mosaic,low quality, bad quality, worst quality'
+                    )
+                """)
+                cursor.execute("PRAGMA table_info(user_settings)")
+                existing = [col[1] for col in cursor.fetchall()]
+                new_fields = {
+                    "limit_count": "INTEGER DEFAULT 50",
+                    "used_today": "INTEGER DEFAULT 0",
+                    "last_reset_date": "TEXT DEFAULT ''",
+                    "negative_prompt": "TEXT DEFAULT 'mosaic,low quality, bad quality, worst quality'",
+                    "is_hd_mode": "INTEGER DEFAULT 0",
+                    "part1": "TEXT DEFAULT '[832,608,0,0]'",
+                    "part2": "TEXT DEFAULT '[832,608,832,0]'",
+                    "artist_chain": "TEXT DEFAULT ''",
+                }
+                for field, definition in new_fields.items():
+                    if field not in existing:
+                        logger.info("DB upgrade: adding column %s", field)
+                        cursor.execute(f"ALTER TABLE user_settings ADD COLUMN {field} {definition}")
+                cursor.execute("SELECT user_id, part1, part2 FROM user_settings")
+                for row in cursor.fetchall():
+                    uid, p1, p2 = row["user_id"], row["part1"], row["part2"]
+                    if not p1 or p1 == "[]":
+                        cursor.execute("UPDATE user_settings SET part1=? WHERE user_id=?", ("[832,608,0,0]", uid))
+                    if not p2 or p2 == "[]":
+                        cursor.execute("UPDATE user_settings SET part2=? WHERE user_id=?", ("[832,608,832,0]", uid))
+                cursor.execute("UPDATE user_settings SET workflow='discord_anima_v2' WHERE workflow='uma'")
+                self._conn.commit()
             logger.info("DB init/upgrade success: %s", DB_PATH)
         except Exception as e:
             logger.error("DB init failed: %s", e)
 
+    @staticmethod
+    def _row_to_settings(row) -> dict:
+        return {
+            "resolution": (row["width"], row["height"]),
+            "active_loras": json.loads(row["active_loras"]),
+            "workflow": row["workflow"],
+            "limit_count": row["limit_count"],
+            "used_today": row["used_today"],
+            "negative_prompt": row["negative_prompt"] or "",
+            "is_hd_mode": bool(row["is_hd_mode"]),
+            "part1": json.loads(row["part1"]) if isinstance(row["part1"], str) else row["part1"],
+            "part2": json.loads(row["part2"]) if isinstance(row["part2"], str) else row["part2"],
+            "artist_chain": row["artist_chain"] or "",
+        }
+
     def get_user_settings(self, user_id: str):
         import datetime
         today_str = datetime.datetime.now().strftime("%Y-%m-%d")
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT width, height, active_loras, workflow, limit_count, used_today, last_reset_date, "
-            "negative_prompt, is_hd_mode, part1, part2, artist_chain FROM user_settings WHERE user_id = ?",
-            (user_id,),
-        )
-        row = cursor.fetchone()
-        if row:
-            (
-                width, height, loras_json, workflow, limit_count, used_today,
-                last_reset_date, negative_prompt, is_hd_mode, part1, part2, artist_chain,
-            ) = row
-            if last_reset_date != today_str:
-                used_today = 0
-                cursor.execute(
-                    "UPDATE user_settings SET used_today=0, last_reset_date=? WHERE user_id=?",
-                    (today_str, user_id),
-                )
-                conn.commit()
-            conn.close()
-            return {
-                "resolution": (width, height),
-                "active_loras": json.loads(loras_json),
-                "workflow": workflow,
-                "limit_count": limit_count,
-                "used_today": used_today,
-                "negative_prompt": negative_prompt or "",
-                "is_hd_mode": bool(is_hd_mode),
-                "part1": json.loads(part1) if isinstance(part1, str) else part1,
-                "part2": json.loads(part2) if isinstance(part2, str) else part2,
-                "artist_chain": artist_chain or "",
-            }
-        else:
+        with self._lock:
+            cursor = self._conn.cursor()
             cursor.execute(
-                "INSERT INTO user_settings (user_id, last_reset_date, workflow) VALUES (?, ?, 'discord_anima_v2')",
-                (user_id, today_str),
+                "SELECT width, height, active_loras, workflow, limit_count, used_today, last_reset_date, "
+                "negative_prompt, is_hd_mode, part1, part2, artist_chain FROM user_settings WHERE user_id = ?",
+                (user_id,),
             )
-            conn.commit()
-            conn.close()
-            return self.get_user_settings(user_id)
+            row = cursor.fetchone()
+            if row:
+                if row["last_reset_date"] != today_str:
+                    cursor.execute(
+                        "UPDATE user_settings SET used_today=0, last_reset_date=? WHERE user_id=?",
+                        (today_str, user_id),
+                    )
+                    self._conn.commit()
+                    settings = dict(row)
+                    settings["used_today"] = 0
+                    return self._row_to_settings(settings)
+                return self._row_to_settings(row)
+            else:
+                cursor.execute(
+                    "INSERT INTO user_settings (user_id, last_reset_date, workflow) VALUES (?, ?, 'discord_anima_v2')",
+                    (user_id, today_str),
+                )
+                self._conn.commit()
+                cursor.execute(
+                    "SELECT width, height, active_loras, workflow, limit_count, used_today, last_reset_date, "
+                    "negative_prompt, is_hd_mode, part1, part2, artist_chain FROM user_settings WHERE user_id = ?",
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                return self._row_to_settings(row)
 
     def use_quota(self, user_id: str, count: int = 1) -> bool:
-        settings = self.get_user_settings(user_id)
-        remaining = settings["limit_count"] - settings["used_today"]
-        if remaining < count:
-            return False
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_settings SET used_today = used_today + ? WHERE user_id=?", (count, user_id))
-        conn.commit()
-        conn.close()
-        return True
+        with self._lock:
+            settings = self.get_user_settings(user_id)
+            remaining = settings["limit_count"] - settings["used_today"]
+            if remaining < count:
+                return False
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE user_settings SET used_today = used_today + ? WHERE user_id=?",
+                (count, user_id),
+            )
+            self._conn.commit()
+            return True
 
     def refund_quota(self, user_id: str, count: int = 1):
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_settings SET used_today = MAX(0, used_today - ?) WHERE user_id=?", (count, user_id))
-        conn.commit()
-        conn.close()
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE user_settings SET used_today = MAX(0, used_today - ?) WHERE user_id=?",
+                (count, user_id),
+            )
+            self._conn.commit()
 
     def set_user_limit(self, user_id: str, new_limit: int):
-        self.get_user_settings(user_id)
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_settings SET limit_count=? WHERE user_id=?", (new_limit, user_id))
-        conn.commit()
-        conn.close()
+        with self._lock:
+            self.get_user_settings(user_id)
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE user_settings SET limit_count=? WHERE user_id=?",
+                (new_limit, user_id),
+            )
+            self._conn.commit()
 
     def set_resolution(self, user_id: str, width: int, height: int):
-        self.get_user_settings(user_id)
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_settings SET width=?, height=? WHERE user_id=?", (width, height, user_id))
-        conn.commit()
-        conn.close()
+        with self._lock:
+            self.get_user_settings(user_id)
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE user_settings SET width=?, height=? WHERE user_id=?",
+                (width, height, user_id),
+            )
+            self._conn.commit()
 
     def set_negative_prompt(self, user_id: str, text: str):
-        self.get_user_settings(user_id)
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_settings SET negative_prompt=? WHERE user_id=?", (text, user_id))
-        conn.commit()
-        conn.close()
+        with self._lock:
+            self.get_user_settings(user_id)
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE user_settings SET negative_prompt=? WHERE user_id=?",
+                (text, user_id),
+            )
+            self._conn.commit()
 
     def set_artist_chain(self, user_id: str, text: str):
-        self.get_user_settings(user_id)
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_settings SET artist_chain=? WHERE user_id=?", (text, user_id))
-        conn.commit()
-        conn.close()
+        with self._lock:
+            self.get_user_settings(user_id)
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE user_settings SET artist_chain=? WHERE user_id=?",
+                (text, user_id),
+            )
+            self._conn.commit()
 
     def set_part1(self, user_id: str, part: list):
-        self.get_user_settings(user_id)
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_settings SET part1=? WHERE user_id=?", (json.dumps(part), user_id))
-        conn.commit()
-        conn.close()
+        with self._lock:
+            self.get_user_settings(user_id)
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE user_settings SET part1=? WHERE user_id=?",
+                (json.dumps(part), user_id),
+            )
+            self._conn.commit()
 
     def set_part2(self, user_id: str, part: list):
-        self.get_user_settings(user_id)
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_settings SET part2=? WHERE user_id=?", (json.dumps(part), user_id))
-        conn.commit()
-        conn.close()
+        with self._lock:
+            self.get_user_settings(user_id)
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE user_settings SET part2=? WHERE user_id=?",
+                (json.dumps(part), user_id),
+            )
+            self._conn.commit()
 
     def set_user_setting(self, user_id: str, key: str, value):
-        self.get_user_settings(user_id)
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute(f"UPDATE user_settings SET {key}=? WHERE user_id=?", (value, user_id))
-        conn.commit()
-        conn.close()
+        with self._lock:
+            self.get_user_settings(user_id)
+            cursor = self._conn.cursor()
+            cursor.execute(
+                f"UPDATE user_settings SET {key}=? WHERE user_id=?",
+                (value, user_id),
+            )
+            self._conn.commit()
 
     def load_workflow_data(self, name: str) -> dict | None:
         file_path = WORKFLOW_DIR / f"{name}.json"
@@ -226,47 +255,47 @@ class WorkflowManager:
         return None
 
     def add_lora(self, user_id: str, lora_name: str, weight: float):
-        settings = self.get_user_settings(user_id)
-        workflow = settings.get("workflow", "discord_anima_v2")
-        current_loras = settings["active_loras"]
-        real_path = self.find_lora_path(lora_name, workflow)
-        if real_path:
-            file_name = os.path.basename(real_path)
-            current_loras[file_name] = weight
-            conn = sqlite3.connect(str(DB_PATH))
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE user_settings SET active_loras=? WHERE user_id=?",
-                (json.dumps(current_loras), user_id),
-            )
-            conn.commit()
-            conn.close()
-            return file_name
-        return None
+        with self._lock:
+            settings = self.get_user_settings(user_id)
+            workflow = settings.get("workflow", "discord_anima_v2")
+            current_loras = settings["active_loras"]
+            real_path = self.find_lora_path(lora_name, workflow)
+            if real_path:
+                file_name = os.path.basename(real_path)
+                current_loras[file_name] = weight
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "UPDATE user_settings SET active_loras=? WHERE user_id=?",
+                    (json.dumps(current_loras), user_id),
+                )
+                self._conn.commit()
+                return file_name
+            return None
 
     def remove_lora(self, user_id: str, lora_name: str):
-        settings = self.get_user_settings(user_id)
-        current_loras = settings["active_loras"]
-        if lora_name in current_loras:
-            del current_loras[lora_name]
-            conn = sqlite3.connect(str(DB_PATH))
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE user_settings SET active_loras=? WHERE user_id=?",
-                (json.dumps(current_loras), user_id),
-            )
-            conn.commit()
-            conn.close()
-            return True
-        return False
+        with self._lock:
+            settings = self.get_user_settings(user_id)
+            current_loras = settings["active_loras"]
+            if lora_name in current_loras:
+                del current_loras[lora_name]
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "UPDATE user_settings SET active_loras=? WHERE user_id=?",
+                    (json.dumps(current_loras), user_id),
+                )
+                self._conn.commit()
+                return True
+            return False
 
     def clear_loras(self, user_id: str):
-        self.get_user_settings(user_id)
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_settings SET active_loras='{}' WHERE user_id=?", (user_id,))
-        conn.commit()
-        conn.close()
+        with self._lock:
+            self.get_user_settings(user_id)
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE user_settings SET active_loras='{}' WHERE user_id=?",
+                (user_id,),
+            )
+            self._conn.commit()
 
 
 wm = WorkflowManager()

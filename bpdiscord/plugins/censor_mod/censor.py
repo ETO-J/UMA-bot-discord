@@ -1,166 +1,185 @@
-from nonebot import on_message
+from nonebot import on_message, get_driver, require
 from nonebot.adapters.discord import Bot as DiscordBot, MessageEvent
 from nonebot_plugin_alconna import UniMessage
 from nonebot.log import logger
-from openai import AsyncOpenAI
-import os
 import importlib
-import httpx
-from dotenv import load_dotenv
+import asyncio
 import time
 
-current_time = time.time()
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
 
-load_dotenv()
-API_KEY = os.getenv("AICHATKEY1")
-
-# 从统一配置中心导入权限配置（与 bpdiscord 插件共享同一模块实例）
 _config = importlib.import_module("bpdiscord.plugins.bpdiscord.config")
 ADMIN_IDS = _config.ADMIN_IDS
 is_admin = _config.is_admin
 ALLOWED_GUILDS_CENSOR = _config.ALLOWED_GUILDS_CENSOR
 is_channel_allowed_censor = _config.is_channel_allowed_censor
-PRIVATE_CHAT_ENABLED = _config.PRIVATE_CHAT_ENABLED
-CENSOR_ADMIN_BYPASS = _config.CENSOR_ADMIN_BYPASS
 
-# 本地ollama地址
-ollama_host = "http://127.0.0.1:11434/v1"
-http_client = httpx.AsyncClient(trust_env=False)
+_processed_users: dict[str, float] = {}
 
 
-async def should_reply_with_ai(message: str, channel_id: str, nickname: str, user_id: str) -> bool:
+def _is_trap_channel(guild_id: str, channel_id: str) -> bool:
+    return is_channel_allowed_censor(guild_id, channel_id)
+
+
+def _get_trap_channel_ids() -> list[tuple[str, str]]:
+    result: list[tuple[str, str]] = []
+    for guild_id, gcfg in ALLOWED_GUILDS_CENSOR.items():
+        if not gcfg.get("enabled", False):
+            continue
+        for channel_id, enabled in gcfg.get("channels", {}).items():
+            if enabled:
+                result.append((guild_id, channel_id))
+    return result
+
+
+async def _ban_and_kick(bot: DiscordBot, guild_id: str, user_id: int) -> bool:
     try:
-        judge_prompt = f"""你是一个专业的社区安全助手。请判断以下 Discord 消息是否为垃圾广告、诈骗、非法引流或骚扰内容。
-【用户信息】
-- 用户昵称：{nickname}
-- 消息内容：{message}
-
-【判断标准】
-1. 是否包含诱导点击链接（尤其是缩写链接）。
-2. 是否包含免费领取、兼职代刷、非法代充、色情消息等典型诈骗语义。
-3. 是否为无意义的刷屏或大量重复符号。
-4. 消息是否与正常的频道交流严重脱节。
-
-【回复格式】
-请只回复一个数字：1（是垃圾信息）或 0（是正常信息）。不要输出任何其他内容。"""
-
-        client = AsyncOpenAI(api_key=API_KEY, base_url=ollama_host, http_client=http_client)
-        response = await client.chat.completions.create(
-            model="glm-4.7-flash:latest",
-            messages=[
-                {"role": "system", "content": "你是一个智能回复判断助手，只输出0或1。"},
-                {"role": "user", "content": judge_prompt}
-            ],
-            max_tokens=1024,
-            temperature=0.1,
+        await bot.create_guild_ban(
+            guild_id=guild_id,
+            user_id=user_id,
+            delete_message_seconds=604800,
         )
-
-        result = response.choices[0].message.content.strip()
-        should_reply = result == "1"
-        logger.info(f"AI判断prompt：{judge_prompt} ")
-        return should_reply
-
+        logger.info(f"[陷阱频道] 已封禁用户 {user_id}，正在清除消息记录...")
     except Exception as e:
-        logger.error(f"AI审核出错: {str(e)}")
+        err_msg = str(e)
+        if "50013" in err_msg or "Missing Permissions" in err_msg:
+            logger.error(
+                f"[陷阱频道] 封禁用户 {user_id} 失败: Discord 权限不足 (错误码 50013)。"
+                f"请确保机器人在服务器 {guild_id} 中拥有「封禁成员」权限，"
+                f"且机器人身份组层级高于目标用户。"
+            )
+        else:
+            logger.error(f"[陷阱频道] 封禁用户 {user_id} 失败: {e}")
+        return False
 
+    await asyncio.sleep(0.5)
 
-user_message_records = {}
+    try:
+        await bot.remove_guild_ban(guild_id=guild_id, user_id=user_id)
+        logger.info(f"[陷阱频道] 已解封用户 {user_id}，踢出+清除消息完成")
+    except Exception as e:
+        logger.warning(f"[陷阱频道] 解封用户 {user_id} 失败，尝试直接踢出: {e}")
+        try:
+            await bot.remove_guild_member(guild_id=guild_id, user_id=user_id)
+            logger.info(f"[陷阱频道] 已踢出用户 {user_id}（用户已被封禁，使用成员移除接口）")
+        except Exception as e2:
+            logger.error(f"[陷阱频道] 踢出用户 {user_id} 也失败: {e2}")
+            return False
+
+    return True
+
 
 message_handler = on_message(priority=5, block=False)
 
 
 @message_handler.handle()
-async def handle_message(bot: DiscordBot, event: MessageEvent):
+async def handle_trap_message(bot: DiscordBot, event: MessageEvent):
     user_id = event.get_user_id()
     channel_id = str(event.channel_id) if hasattr(event, "channel_id") else user_id
     guild_id = str(event.guild_id) if hasattr(event, "guild_id") else None
+
+    if guild_id is None:
+        return
+
+    if not _is_trap_channel(guild_id, channel_id):
+        return
+
+    if is_admin(user_id):
+        return
+
+    try:
+        if hasattr(event, 'author') and event.author:
+            if getattr(event.author, 'bot', False):
+                return
+    except Exception:
+        pass
 
     try:
         if hasattr(event, 'author'):
             nickname = event.author.global_name or event.author.name or '未知用户'
         else:
             nickname = '未知用户'
-    except Exception as e:
-        logger.error(f"获取用户信息失败: {str(e)}")
-        nickname = "未知用户"
+    except Exception:
+        nickname = '未知用户'
 
-    message = event.get_message()
-    current_time = time.time()
     plain_text = event.get_plaintext().strip()
-    logger.info(f"收到频道【{channel_id}】中用户【{nickname}】(ID:{user_id}) 的消息: {plain_text}")
+    logger.info(
+        f"[陷阱频道] 检测到用户 {nickname}(ID:{user_id}) "
+        f"在频道 {channel_id} 发送消息: {plain_text[:100]}"
+    )
 
-    # ==================== 权限检查 ====================
-    admin_bypass = CENSOR_ADMIN_BYPASS and is_admin(user_id)
-    is_private = guild_id is None
+    user_id_int = int(user_id)
 
-    if is_private:
-        if not PRIVATE_CHAT_ENABLED:
-            logger.info(f"私聊垃圾检测已全局禁用，忽略来自用户 {user_id} 的消息")
-            return
+    success = await _ban_and_kick(bot, guild_id, user_id_int)
+    if success:
+        _processed_users[user_id] = time.time()
+        await UniMessage(
+            f"检测到垃圾消息发送者 <@{user_id}>，已踢出并清除消息记录。"
+        ).send()
     else:
-        if not is_channel_allowed_censor(guild_id, channel_id) and not admin_bypass:
-            logger.info(f"群聊 {guild_id} 或频道 {channel_id} 未在垃圾检测允许列表中，忽略消息")
-            return
+        await UniMessage(
+            f"检测到垃圾消息发送者 <@{user_id}>，但处理失败，请检查机器人权限。"
+        ).send()
 
-    # ==================== 命令消息过滤 ====================
-    DISCORD_EXACT_COMMANDS = [
-        "波旁",
-        "人设列表",
-        "切换人设",
-        "draw",
-        "高清",
-        "切换分辨率",
-        "切换负面",
-        "重置负面",
-        "lora列表",
-        "添加lora",
-        "删除lora",
-        "重置lora",
-        "管理员模式",
-    ]
-    first_word = plain_text.split()[0] if plain_text else ""
-    if plain_text.startswith(("波旁")) or first_word in DISCORD_EXACT_COMMANDS:
-        logger.info(f"命令消息 {plain_text}，跳过处理")
+
+@scheduler.scheduled_job("interval", minutes=10, id="trap_channel_periodic_scan")
+async def periodic_trap_channel_scan():
+    logger.info("[陷阱频道扫描] 开始定期扫描...")
+
+    bots = get_driver().bots
+    if not bots:
+        logger.warning("[陷阱频道扫描] 没有可用的Bot实例")
         return
 
-    # ==================== 垃圾消息检测 ====================
-    if user_id not in user_message_records:
-        user_message_records[user_id] = []
+    bot = list(bots.values())[0]
 
-    user_message_records[user_id].append((current_time, channel_id, guild_id))
+    trap_channels = _get_trap_channel_ids()
+    if not trap_channels:
+        logger.info("[陷阱频道扫描] 没有配置陷阱频道，跳过")
+        return
 
-    user_message_records[user_id] = [
-        record for record in user_message_records[user_id]
-        if current_time - record[0] < 10
-    ]
+    now = time.time()
+    users_to_process: set[int] = set()
+    guild_for_user: dict[int, str] = {}
 
-    recent_channels = set()
-    for record in user_message_records[user_id]:
-        if current_time - record[0] < 6:
-            recent_channels.add(record[1])
+    for guild_id_str, channel_id_str in trap_channels:
+        try:
+            messages = await bot.get_channel_messages(
+                channel_id=int(channel_id_str),
+                limit=50,
+            )
+            for msg in messages:
+                if not hasattr(msg, 'author') or not msg.author:
+                    continue
 
-    condition1 = len(recent_channels) >= 3
-    if condition1:
-        logger.info(f"用户 {user_id} 在6s内发送消息到 {len(recent_channels)} 个不同频道")
+                author_id_str = str(msg.author.id)
 
-    condition2 = 'http' in plain_text.lower() or 'discord' in plain_text.lower()
-    if condition2:
-        logger.info(f"用户 {user_id} 的消息包含链接: {plain_text[:50]}...")
+                if getattr(msg.author, 'bot', False):
+                    continue
+                if is_admin(author_id_str):
+                    continue
+                if author_id_str in _processed_users:
+                    if now - _processed_users[author_id_str] < 600:
+                        continue
 
-    if condition1: #and condition2:
-        logger.info(f"触发垃圾消息检测，用户 {user_id} 同时满足多频道和链接条件，启动AI审核")
-        is_spam = True
-        if is_spam:
-            try:
-                await bot.create_guild_ban(
-                    guild_id=guild_id,
-                    user_id=int(user_id),
-                    delete_message_seconds=86400
-                )
-                await UniMessage(f"指令已确认。已将目标驱逐出服务器，并清除了其近期的所有痕迹。").send()
-            except Exception as e:
-                await UniMessage(f"封禁失败，请确保机器人的身份组层级高于该用户。错误: {e}").send()
-            await UniMessage(f"已触发AI审核机制，成功进行诈骗分子{user_id}杀灭（DEBUG）").send()
-            return
-        else:
-            await UniMessage(f"已触发AI审核机制，{user_id}的消息审核结果无异常").send()
+                users_to_process.add(int(msg.author.id))
+                guild_for_user[int(msg.author.id)] = guild_id_str
+        except Exception as e:
+            logger.error(f"[陷阱频道扫描] 获取频道 {channel_id_str} 消息失败: {e}")
+            continue
+
+    for user_id_int in users_to_process:
+        gid_str = guild_for_user.get(user_id_int)
+        if gid_str is None:
+            continue
+        logger.info(f"[陷阱频道扫描] 发现未处理的用户 {user_id_int}，执行清理...")
+        success = await _ban_and_kick(bot, gid_str, user_id_int)
+        if success:
+            _processed_users[str(user_id_int)] = now
+
+    for uid in list(_processed_users.keys()):
+        if now - _processed_users[uid] > 3600:
+            del _processed_users[uid]
+
+    logger.info("[陷阱频道扫描] 定期扫描完成")

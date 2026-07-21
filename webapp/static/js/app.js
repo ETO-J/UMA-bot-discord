@@ -8,6 +8,11 @@ const pollingTimers = {};
 let g_authenticated = false;
 let g_is_admin = false;
 
+let g_videoFirstImage = null;
+let g_videoLastImage = null;
+let g_videoQuality = "480p";
+let g_videoOrientation = "portrait";
+
 async function checkAuth() {
   const el = $("#header-user");
   if (!el) return;
@@ -112,29 +117,50 @@ function getAdvancedParams() {
   const seed = parseInt($("#txt-seed").value);
   const sampler = $("#sel-sampler").value || null;
   const scheduler = $("#sel-scheduler").value || null;
-  const stepsVal = $("#txt-steps").value;
-  const cfgVal = $("#txt-cfg").value;
   return {
     seed: seed >= 0 ? seed : null,
     sampler_name: sampler,
     scheduler: scheduler,
-    steps: stepsVal ? parseInt(stepsVal) : null,
-    cfg: cfgVal ? parseFloat(cfgVal) : null,
   };
+}
+
+function getGenerateButtonText() {
+  const wf = currentWorkflow();
+  if (wf === "multidraw") return t("multidrawGenerate");
+  if (wf === "webui_video") return t("videoGenerate");
+  return t("generate");
 }
 
 function switchWorkflowUI() {
   const wf = currentWorkflow();
   const isMulti = wf === "multidraw";
-  $("#fields-anima").style.display = isMulti ? "none" : "";
+  const isVideo = wf === "webui_video";
+
+  $("#fields-anima").style.display = (isMulti || isVideo) ? "none" : "";
   $("#fields-multidraw").style.display = isMulti ? "" : "none";
+  $("#fields-video").style.display = isVideo ? "" : "none";
+
+  const resSection = document.getElementById("section-resolution");
+  if (resSection) resSection.style.display = isVideo ? "none" : "";
+
+  const negSection = document.getElementById("section-negative");
+  if (negSection) negSection.style.display = isVideo ? "none" : "";
+
+  const advVideoFields = document.getElementById("adv-video-fields");
+  if (advVideoFields) advVideoFields.style.display = isVideo ? "" : "none";
+
+  document.querySelectorAll(".adv-image-only").forEach(el => {
+    el.style.display = isVideo ? "none" : "";
+  });
+
+  if (isVideo) updateVideoCost();
   updateGenerateButton();
 }
 
 function updateGenerateButton() {
   const btn = $("#btn-generate");
   if (btn.disabled) return;
-  btn.textContent = currentWorkflow() === "multidraw" ? t("multidrawGenerate") : t("generate");
+  btn.textContent = getGenerateButtonText();
 }
 
 // ---- Thumbnail helpers ----
@@ -167,14 +193,14 @@ async function renderLoraGallery(data) {
         const isActive = filename in active;
         const weight = isActive ? active[filename] : parseFloat($("#txt-lora-defweight").value) || 0.8;
         const cls = isActive ? " active" : "";
-        html += `
+      html += `
           <div class="lora-card${cls}" data-filename="${escAttr(filename)}">
             <img src="${thumbnailUrl(filename)}" loading="lazy" data-thumb-base="${escAttr(filename)}" data-thumb-idx="0">
             <div class="lora-name" title="${escAttr(filename)}">${escHtml(loraDisplayName(filename))}</div>
             <div class="lora-row">
               <input type="checkbox" ${isActive ? "checked" : ""}>
               <input type="range" min="0" max="2" step="0.05" value="${weight}">
-              <input type="number" class="lora-num" value="${weight.toFixed(2)}" min="0" max="2" step="0.05">
+              <span class="lora-val">${weight.toFixed(2)}</span>
             </div>
           </div>`;
       }
@@ -186,7 +212,7 @@ async function renderLoraGallery(data) {
       const img = card.querySelector("img");
       const cb = card.querySelector("input[type=checkbox]");
       const range = card.querySelector("input[type=range]");
-      const num = card.querySelector(".lora-num");
+      const valSpan = card.querySelector(".lora-val");
 
       img.addEventListener("error", () => {
         let idx = parseInt(img.dataset.thumbIdx) || 0;
@@ -200,22 +226,10 @@ async function renderLoraGallery(data) {
         }
       });
 
-      function syncRangeToNum() { num.value = parseFloat(range.value).toFixed(2); }
-      function syncNumToRange() {
-        let v = parseFloat(num.value);
-        if (isNaN(v)) v = 0.8;
-        v = Math.min(2, Math.max(0, v));
-        range.value = v;
-        num.value = v.toFixed(2);
-      }
-      range.addEventListener("input", syncRangeToNum);
+      function updateVal() { valSpan.textContent = parseFloat(range.value).toFixed(2); }
+      range.addEventListener("input", updateVal);
       range.addEventListener("change", async () => {
-        syncRangeToNum();
-        const w = parseFloat(range.value);
-        if (cb.checked) { await API.addLora(filename, w); card.classList.add("active"); }
-      });
-      num.addEventListener("change", async () => {
-        syncNumToRange();
+        updateVal();
         const w = parseFloat(range.value);
         if (cb.checked) { await API.addLora(filename, w); card.classList.add("active"); }
       });
@@ -323,9 +337,6 @@ function setupEvents() {
     "#txt-part2-w", "#txt-part2-h", "#txt-part2-x", "#txt-part2-y"];
   partSelectors.forEach(sel => $(sel).addEventListener("blur", saveMultidrawParts));
 
-  $("#btn-expand-panel").addEventListener("click", () => {
-    $("#panel-right").classList.toggle("expanded");
-  });
   $("#btn-refresh-history").addEventListener("click", refreshTaskList);
 
   $("#txt-prompt").addEventListener("keydown", (e) => {
@@ -334,6 +345,51 @@ function setupEvents() {
       generate();
     }
   });
+
+  const vp = document.getElementById("txt-video-prompt");
+  if (vp) {
+    vp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        generate();
+      }
+    });
+  }
+
+  setupVideoUpload("video-first-drop", "video-first-input", "video-first-preview", "video-first-placeholder", true);
+  setupVideoUpload("video-last-drop", "video-last-input", "video-last-preview", "video-last-placeholder", false);
+
+  $$(".quality-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      $$(".quality-btn").forEach(b => b.classList.toggle("active", b === btn));
+      g_videoQuality = btn.dataset.quality;
+      updateVideoCost();
+    });
+  });
+
+  const durSel = document.getElementById("sel-video-duration");
+  if (durSel) durSel.addEventListener("change", updateVideoCost);
+
+  const loraChk = document.getElementById("chk-video-lora");
+  if (loraChk) {
+    loraChk.addEventListener("change", () => {
+      const row = document.getElementById("video-lora-strength-row");
+      if (row) row.style.opacity = loraChk.checked ? "1" : "0.4";
+      row.style.pointerEvents = loraChk.checked ? "auto" : "none";
+    });
+  }
+  const rngVLora = document.getElementById("rng-video-lora");
+  const numVLora = document.getElementById("num-video-lora");
+  if (rngVLora && numVLora) {
+    rngVLora.addEventListener("input", () => { numVLora.value = parseFloat(rngVLora.value).toFixed(2); });
+    numVLora.addEventListener("change", () => {
+      let v = parseFloat(numVLora.value);
+      if (isNaN(v)) v = 0.7;
+      v = Math.min(1, Math.max(0, v));
+      rngVLora.value = v;
+      numVLora.value = v.toFixed(2);
+    });
+  }
 }
 
 async function saveMultidrawParts() {
@@ -349,6 +405,75 @@ async function saveMultidrawParts() {
   await API.setPart2(p2w, p2h, p2x, p2y);
 }
 
+// ---- Video helpers ----
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      resolve(result.substring(result.indexOf(",") + 1));
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function detectOrientation(w, h) {
+  if (w > h * 1.1) return "landscape";
+  if (h > w * 1.1) return "portrait";
+  return "square";
+}
+
+function setupVideoUpload(zoneId, inputId, previewId, placeholderId, isFirst) {
+  const zone = document.getElementById(zoneId);
+  const input = document.getElementById(inputId);
+  const preview = document.getElementById(previewId);
+  const placeholder = document.getElementById(placeholderId);
+  if (!zone) return;
+
+  zone.addEventListener("click", () => input.click());
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("drag-over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("drag-over");
+    if (e.dataTransfer.files.length > 0) handleVideoImage(e.dataTransfer.files[0]);
+  });
+  input.addEventListener("change", () => {
+    if (input.files.length > 0) handleVideoImage(input.files[0]);
+  });
+
+  async function handleVideoImage(file) {
+    try {
+      const b64 = await fileToBase64(file);
+      if (isFirst) {
+        g_videoFirstImage = b64;
+        const img = new Image();
+        img.onload = () => {
+          g_videoOrientation = detectOrientation(img.naturalWidth, img.naturalHeight);
+        };
+        img.src = URL.createObjectURL(file);
+      } else {
+        g_videoLastImage = b64;
+      }
+      preview.src = URL.createObjectURL(file);
+      preview.style.display = "block";
+      placeholder.style.display = "none";
+    } catch (e) {
+      console.error("Image load failed:", e);
+    }
+  }
+}
+
+function updateVideoCost() {
+  const quality = g_videoQuality;
+  const duration = parseInt(document.getElementById("sel-video-duration")?.value || "5");
+  const base = quality === "480p" ? 250 : 500;
+  const cost = Math.round(base * duration * 0.2);
+  const el = document.getElementById("video-cost-display");
+  if (el) el.textContent = t("cost") + ": " + cost;
+}
+
 // ---- Generate ----
 async function generate() {
   if (!g_authenticated) {
@@ -358,12 +483,15 @@ async function generate() {
 
   const wf = currentWorkflow();
   const isMulti = wf === "multidraw";
+  const isVideo = wf === "webui_video";
 
-  try {
-    await API.setNegativePrompt($("#txt-negative").value);
-    if (!isMulti) await API.setArtistChain($("#txt-artist-chain").value);
-    if (isMulti) await saveMultidrawParts();
-  } catch {}
+  if (!isVideo) {
+    try {
+      await API.setNegativePrompt($("#txt-negative").value);
+      if (!isMulti) await API.setArtistChain($("#txt-artist-chain").value);
+      if (isMulti) await saveMultidrawParts();
+    } catch {}
+  }
 
   const btn = $("#btn-generate");
   btn.disabled = true;
@@ -373,7 +501,30 @@ async function generate() {
     let result;
     const adv = getAdvancedParams();
 
-    if (isMulti) {
+    if (isVideo) {
+      const prompt = $("#txt-video-prompt").value.trim();
+      if (!prompt) {
+        setStatus(t("promptRequired"));
+        btn.disabled = false;
+        btn.textContent = t("videoGenerate");
+        return;
+      }
+      if (!g_videoFirstImage) {
+        setStatus(t("firstFrameRequired"), "failed");
+        btn.disabled = false;
+        btn.textContent = t("videoGenerate");
+        return;
+      }
+      const duration = parseInt($("#sel-video-duration").value);
+      const loraEnabled = $("#chk-video-lora").checked;
+      const loraStrength = parseFloat($("#num-video-lora").value);
+      const videoNeg = $("#txt-video-negative").value.trim() || null;
+      result = await API.videoAsync(
+        prompt, g_videoFirstImage, g_videoLastImage,
+        g_videoQuality, duration, g_videoOrientation,
+        loraEnabled, loraStrength, videoNeg, adv
+      );
+    } else if (isMulti) {
       const g = $("#txt-md-global").value.trim();
       const p1 = $("#txt-md-p1").value.trim();
       const p2 = $("#txt-md-p2").value.trim();
@@ -400,7 +551,7 @@ async function generate() {
     startPolling(result.task_id, isMulti);
   } catch (e) {
     btn.disabled = false;
-    btn.textContent = isMulti ? t("multidrawGenerate") : t("generate");
+    btn.textContent = getGenerateButtonText();
     if (e.status === 429) {
       setStatus(t("quotaExhausted"), "failed");
     } else {
@@ -418,10 +569,15 @@ function startPolling(taskId, isMulti) {
       if (task.status === "completed" && task.has_image) {
         clearInterval(pollingTimers[taskId]);
         delete pollingTimers[taskId];
-        const blob = await API.getTaskImage(taskId);
-        showImage(URL.createObjectURL(blob));
+        if (task.output_type === "video") {
+          const blob = await API.getTaskVideo(taskId);
+          showVideo(URL.createObjectURL(blob));
+        } else {
+          const blob = await API.getTaskImage(taskId);
+          showImage(URL.createObjectURL(blob));
+        }
         $("#btn-generate").disabled = false;
-        $("#btn-generate").textContent = isMulti ? t("multidrawGenerate") : t("generate");
+        $("#btn-generate").textContent = getGenerateButtonText();
         setStatus(t("completed"), "completed");
         await loadQuota();
         addTaskToHistory(task);
@@ -429,22 +585,42 @@ function startPolling(taskId, isMulti) {
         clearInterval(pollingTimers[taskId]);
         delete pollingTimers[taskId];
         $("#btn-generate").disabled = false;
-        $("#btn-generate").textContent = isMulti ? t("multidrawGenerate") : t("generate");
+        $("#btn-generate").textContent = getGenerateButtonText();
         setStatus(t("failed") + ": " + (task.error || ""), "failed");
         await loadQuota();
       } else {
         setStatus(t(task.status) + "... (" + task.task_id + ")", task.status);
       }
-    } catch (e) { console.error("Poll error:", e); }
+    } catch (e) {
+      console.error("Poll error:", e);
+      if (e.status === 404) {
+        clearInterval(pollingTimers[taskId]);
+        delete pollingTimers[taskId];
+        $("#btn-generate").disabled = false;
+        $("#btn-generate").textContent = getGenerateButtonText();
+        setStatus(t("taskNotFound") + ": " + taskId, "failed");
+        refreshSingleTaskItem(taskId, { task_id: taskId, status: "failed", error: t("taskNotFound"), created_at: Date.now() / 1000, prompt: "", has_image: false });
+      }
+    }
   }, 1500);
 }
 
 function showImage(url) {
   $("#preview-placeholder").style.display = "none";
   $("#preview-spinner").style.display = "none";
+  $("#preview-video").style.display = "none";
   const img = $("#preview-img");
   img.src = url;
   img.style.display = "block";
+}
+
+function showVideo(url) {
+  $("#preview-placeholder").style.display = "none";
+  $("#preview-spinner").style.display = "none";
+  $("#preview-img").style.display = "none";
+  const video = $("#preview-video");
+  video.src = url;
+  video.style.display = "block";
 }
 
 function setStatus(text, cls = "") {
@@ -466,20 +642,29 @@ async function refreshTaskList() {
     const sorted = tasks.sort((a, b) => b.created_at - a.created_at);
     container.innerHTML = sorted.map(t => taskItemHtml(t)).join("");
     container.querySelectorAll(".task-item").forEach(el => {
-      const summary = el.querySelector(".task-summary");
-      const detail = el.querySelector(".task-detail");
-      summary.addEventListener("click", () => {
-        detail.classList.toggle("open");
-      });
-      el.addEventListener("dblclick", async () => {
+      el.addEventListener("click", async () => {
         const tid = el.dataset.taskId;
-        const task = await API.getTask(tid);
-        if (task.status === "completed" && task.has_image) {
-          const blob = await API.getTaskImage(tid);
-          showImage(URL.createObjectURL(blob));
-          setStatus(t("imageLoaded") + ": " + tid, "completed");
-        } else if (task.status === "processing" || task.status === "queued") {
-          startPolling(tid, currentWorkflow() === "multidraw");
+        try {
+          const task = await API.getTask(tid);
+          if (task.status === "completed" && task.has_image) {
+            if (task.output_type === "video") {
+              const blob = await API.getTaskVideo(tid);
+              showVideo(URL.createObjectURL(blob));
+            } else {
+              const blob = await API.getTaskImage(tid);
+              showImage(URL.createObjectURL(blob));
+            }
+            setStatus(t("imageLoaded") + ": " + tid, "completed");
+          } else if (task.status === "processing" || task.status === "queued") {
+            startPolling(tid, currentWorkflow() === "multidraw");
+          }
+        } catch (e) {
+          if (e.status === 404) {
+            el.remove();
+            setStatus(t("taskNotFound") + ": " + tid, "failed");
+          } else {
+            console.error("Task load failed:", e);
+          }
         }
       });
     });
@@ -501,6 +686,7 @@ function addTaskToHistory(task) {
 function taskItemHtml(task) {
   const shortPrompt = (task.prompt || "").substring(0, 40);
   const time = new Date(task.created_at * 1000).toLocaleTimeString();
+  const typeIcon = task.output_type === "video" ? "🎬 " : "";
   const params = [];
   if (task.seed != null) params.push(t("seed") + ": " + task.seed);
   if (task.sampler_name) params.push(t("sampler") + ": " + task.sampler_name);
@@ -517,7 +703,7 @@ function taskItemHtml(task) {
   return `
     <div class="task-item" data-task-id="${escAttr(task.task_id)}">
       <div class="task-summary">
-        <div class="task-id">${escHtml(task.task_id)} <span style="color:#666">${time}</span></div>
+        <div class="task-id">${typeIcon}${escHtml(task.task_id)} <span style="color:#666">${time}</span></div>
         <div class="task-prompt">${escHtml(shortPrompt)}</div>
         <div class="task-status status-${task.status}">${t(task.status)}${task.error ? ": " + escHtml(task.error.substring(0, 30)) : ""}</div>
       </div>

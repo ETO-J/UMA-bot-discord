@@ -1,7 +1,8 @@
 # Mihono Bourbon Discord Bot — User Manual
 
-> Version: 2026.5.26
+> Version: 2026.7.12
 
+⚠Note that the commands related to discord bot drawing mentioned in the article are outdated. I will no longer update the drawing-related functions of the discord bot and will only perform daily maintenance. If you want to experience the latest features, please visit the website https://bourbon-draw.cn/
 ---
 
 ## Table of Contents

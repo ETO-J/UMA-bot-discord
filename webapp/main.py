@@ -19,6 +19,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await task_queue.load_persisted_tasks()
     async def cleanup_loop():
         while True:
             await asyncio.sleep(300)
