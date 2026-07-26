@@ -34,6 +34,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ComfyUI WebUI", lifespan=lifespan)
 
+
+@app.middleware("http")
+async def no_cache_html(request, call_next):
+    """Force revalidation of HTML pages so versioned asset URLs (e.g.
+    /js/app.js?v=15) always reach the browser after a deploy.
+    JS/CSS stay long-cached via nginx 'immutable' + ?v= bumping."""
+    response = await call_next(request)
+    if "text/html" in response.headers.get("content-type", ""):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"https?://.*\.trycloudflare\.com|https?://localhost:\d+|https?://127\.0\.0\.1:\d+",

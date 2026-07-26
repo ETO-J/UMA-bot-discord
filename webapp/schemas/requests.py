@@ -8,6 +8,7 @@ class DrawRequest(BaseModel):
     scheduler: str | None = None
     steps: int | None = None
     cfg: float | None = None
+    hd_mode: bool = False
 
 
 class MultidrawRequest(BaseModel):
@@ -43,6 +44,10 @@ class NegativePromptRequest(BaseModel):
     text: str
 
 
+class HdModeRequest(BaseModel):
+    enabled: bool
+
+
 class ArtistChainRequest(BaseModel):
     text: str
 
@@ -52,6 +57,17 @@ class PartRequest(BaseModel):
     h: int
     x: int = 0
     y: int = 0
+
+
+class Flux2EditRequest(BaseModel):
+    prompt: str
+    source_image: str  # base64, required
+    reference_image: str | None = None  # base64, optional
+    negative_prompt: str | None = None
+    seed: int | None = None
+    steps: int | None = None
+    cfg: float | None = None
+    sampler_name: str | None = None
 
 
 class LoraAddRequest(BaseModel):
@@ -79,6 +95,11 @@ class TaskResponse(BaseModel):
     steps: int | None = None
     cfg: float | None = None
     output_type: str = "image"
+    queue_position: int | None = None
+    queue_total: int | None = None
+    estimated_seconds: float | None = None
+    elapsed_seconds: float | None = None
+    is_running: bool | None = None
 
 
 class QuotaResponse(BaseModel):
@@ -95,6 +116,7 @@ class SettingsResponse(BaseModel):
     active_loras: dict[str, float]
     part1: list[int]
     part2: list[int]
+    is_hd_mode: bool = False
 
 
 class LoraListResponse(BaseModel):

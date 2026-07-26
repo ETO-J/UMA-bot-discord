@@ -2,6 +2,39 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 const RESOLUTIONS = { 1: [832, 1216], 2: [1024, 1024], 3: [1216, 832], 0: null };
 
+function formatTime(seconds) {
+  if (seconds == null || seconds <= 0) return "";
+  const total = Math.round(seconds);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  if (m > 0) return m + t("min") + s + t("sec");
+  return s + t("sec");
+}
+
+// Build the multi-line status text for a queued/processing task,
+// including real ComfyUI queue position, ETA and elapsed time.
+function taskStatusText(task) {
+  let statusText = t(task.status) + "... (" + task.task_id + ")";
+  const pos = task.queue_position;
+  const hasQueue = pos != null && task.queue_total != null;
+  if (hasQueue && pos > 0) {
+    // Waiting inside the ComfyUI queue
+    statusText += "\n" + t("queuePosition") + ": " + (pos + 1) + "/" + task.queue_total;
+    if (task.estimated_seconds != null && task.estimated_seconds > 0) {
+      statusText += "  " + t("estimatedWait") + ": ~" + formatTime(task.estimated_seconds);
+    }
+  } else if (task.status === "processing" || (hasQueue && task.is_running)) {
+    // Currently executing on ComfyUI
+    if (task.elapsed_seconds != null && task.elapsed_seconds > 0) {
+      statusText += "\n" + t("elapsed") + ": " + formatTime(task.elapsed_seconds);
+    }
+    if (task.estimated_seconds != null && task.estimated_seconds > 0) {
+      statusText += "  " + t("estimatedRemaining") + ": ~" + formatTime(task.estimated_seconds);
+    }
+  }
+  return statusText;
+}
+
 let currentRes = "1";
 let advOpen = false;
 const pollingTimers = {};
@@ -12,6 +45,14 @@ let g_videoFirstImage = null;
 let g_videoLastImage = null;
 let g_videoQuality = "480p";
 let g_videoOrientation = "portrait";
+let g_hdMode = false;
+let g_flux2SourceImage = null;
+let g_flux2RefImage = null;
+
+// Last queued/processing task shown in the preview area, and the last
+// fetched task list — both used to re-render texts on language switch.
+let g_activeTask = null;
+let g_lastTasks = null;
 
 async function checkAuth() {
   const el = $("#header-user");
@@ -44,6 +85,8 @@ async function loadSettings() {
     const s = await API.getSettings();
     $("#txt-negative").value = s.negative_prompt;
     $("#txt-artist-chain").value = s.artist_chain;
+    g_hdMode = !!s.is_hd_mode;
+    $("#chk-hd-mode").checked = g_hdMode;
     const match = Object.entries(RESOLUTIONS).find(([k, v]) => v && v[0] === s.resolution[0] && v[1] === s.resolution[1]);
     currentRes = match ? match[0] : "0";
     if (currentRes === "0") {
@@ -128,6 +171,7 @@ function getGenerateButtonText() {
   const wf = currentWorkflow();
   if (wf === "multidraw") return t("multidrawGenerate");
   if (wf === "webui_video") return t("videoGenerate");
+  if (wf === "discord_flux2_9b_edit") return t("flux2Generate");
   return t("generate");
 }
 
@@ -135,16 +179,18 @@ function switchWorkflowUI() {
   const wf = currentWorkflow();
   const isMulti = wf === "multidraw";
   const isVideo = wf === "webui_video";
+  const isFlux2 = wf === "discord_flux2_9b_edit";
 
-  $("#fields-anima").style.display = (isMulti || isVideo) ? "none" : "";
+  $("#fields-anima").style.display = (isMulti || isVideo || isFlux2) ? "none" : "";
   $("#fields-multidraw").style.display = isMulti ? "" : "none";
   $("#fields-video").style.display = isVideo ? "" : "none";
+  $("#fields-flux2").style.display = isFlux2 ? "" : "none";
 
   const resSection = document.getElementById("section-resolution");
-  if (resSection) resSection.style.display = isVideo ? "none" : "";
+  if (resSection) resSection.style.display = (isVideo || isFlux2) ? "none" : "";
 
   const negSection = document.getElementById("section-negative");
-  if (negSection) negSection.style.display = isVideo ? "none" : "";
+  if (negSection) negSection.style.display = (isVideo || isFlux2) ? "none" : "";
 
   const advVideoFields = document.getElementById("adv-video-fields");
   if (advVideoFields) advVideoFields.style.display = isVideo ? "" : "none";
@@ -154,6 +200,7 @@ function switchWorkflowUI() {
   });
 
   if (isVideo) updateVideoCost();
+  updateDrawCost();
   updateGenerateButton();
 }
 
@@ -309,6 +356,12 @@ function setupEvents() {
     await API.setArtistChain($("#txt-artist-chain").value);
   });
 
+  $("#chk-hd-mode").addEventListener("change", async () => {
+    g_hdMode = $("#chk-hd-mode").checked;
+    updateDrawCost();
+    try { await API.setHdMode(g_hdMode); } catch {}
+  });
+
   $("#btn-generate").addEventListener("click", generate);
 
   $("#btn-adv-toggle").addEventListener("click", () => {
@@ -358,6 +411,18 @@ function setupEvents() {
 
   setupVideoUpload("video-first-drop", "video-first-input", "video-first-preview", "video-first-placeholder", true);
   setupVideoUpload("video-last-drop", "video-last-input", "video-last-preview", "video-last-placeholder", false);
+  setupFlux2Upload("flux2-source-drop", "flux2-source-input", "flux2-source-preview", "flux2-source-placeholder", true);
+  setupFlux2Upload("flux2-ref-drop", "flux2-ref-input", "flux2-ref-preview", "flux2-ref-placeholder", false);
+
+  const fp = document.getElementById("txt-flux2-prompt");
+  if (fp) {
+    fp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        generate();
+      }
+    });
+  }
 
   $$(".quality-btn").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -465,6 +530,42 @@ function setupVideoUpload(zoneId, inputId, previewId, placeholderId, isFirst) {
   }
 }
 
+function setupFlux2Upload(zoneId, inputId, previewId, placeholderId, isSource) {
+  const zone = document.getElementById(zoneId);
+  const input = document.getElementById(inputId);
+  const preview = document.getElementById(previewId);
+  const placeholder = document.getElementById(placeholderId);
+  if (!zone) return;
+
+  zone.addEventListener("click", () => input.click());
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("drag-over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("drag-over");
+    if (e.dataTransfer.files.length > 0) handleFlux2Image(e.dataTransfer.files[0]);
+  });
+  input.addEventListener("change", () => {
+    if (input.files.length > 0) handleFlux2Image(input.files[0]);
+  });
+
+  async function handleFlux2Image(file) {
+    try {
+      const b64 = await fileToBase64(file);
+      if (isSource) {
+        g_flux2SourceImage = b64;
+      } else {
+        g_flux2RefImage = b64;
+      }
+      preview.src = URL.createObjectURL(file);
+      preview.style.display = "block";
+      placeholder.style.display = "none";
+    } catch (e) {
+      console.error("Image load failed:", e);
+    }
+  }
+}
+
 function updateVideoCost() {
   const quality = g_videoQuality;
   const duration = parseInt(document.getElementById("sel-video-duration")?.value || "5");
@@ -472,6 +573,16 @@ function updateVideoCost() {
   const cost = Math.round(base * duration * 0.2);
   const el = document.getElementById("video-cost-display");
   if (el) el.textContent = t("cost") + ": " + cost;
+}
+
+function updateDrawCost() {
+  const el = document.getElementById("draw-cost-display");
+  if (!el) return;
+  const wf = currentWorkflow();
+  if (wf === "webui_video") { el.textContent = ""; return; }
+  if (wf === "discord_flux2_9b_edit") { el.textContent = t("cost") + ": 20"; return; }
+  const cost = (wf === "multidraw") ? 10 : (g_hdMode ? 10 : 1);
+  el.textContent = t("cost") + ": " + cost;
 }
 
 // ---- Generate ----
@@ -484,8 +595,9 @@ async function generate() {
   const wf = currentWorkflow();
   const isMulti = wf === "multidraw";
   const isVideo = wf === "webui_video";
+  const isFlux2 = wf === "discord_flux2_9b_edit";
 
-  if (!isVideo) {
+  if (!isVideo && !isFlux2) {
     try {
       await API.setNegativePrompt($("#txt-negative").value);
       if (!isMulti) await API.setArtistChain($("#txt-artist-chain").value);
@@ -524,6 +636,24 @@ async function generate() {
         g_videoQuality, duration, g_videoOrientation,
         loraEnabled, loraStrength, videoNeg, adv
       );
+    } else if (isFlux2) {
+      const prompt = $("#txt-flux2-prompt").value.trim();
+      if (!prompt) {
+        setStatus(t("promptRequired"));
+        btn.disabled = false;
+        btn.textContent = t("flux2Generate");
+        return;
+      }
+      if (!g_flux2SourceImage) {
+        setStatus(t("flux2SourceRequired"), "failed");
+        btn.disabled = false;
+        btn.textContent = t("flux2Generate");
+        return;
+      }
+      const flux2Neg = $("#txt-flux2-negative").value.trim() || null;
+      result = await API.flux2EditAsync(
+        prompt, g_flux2SourceImage, g_flux2RefImage, flux2Neg, adv
+      );
     } else if (isMulti) {
       const g = $("#txt-md-global").value.trim();
       const p1 = $("#txt-md-p1").value.trim();
@@ -543,11 +673,15 @@ async function generate() {
         btn.textContent = t("generate");
         return;
       }
+      if (g_hdMode) adv.hd_mode = true;
       result = await API.drawAsync(prompt, adv);
     }
 
     btn.textContent = t("generating");
-    setStatus(t("taskSubmitted") + ": " + result.task_id, "processing");
+    // The submit response already carries queue info — show it immediately
+    // instead of a plain "task submitted" message.
+    g_activeTask = result;
+    setStatus(taskStatusText(result), result.status === "queued" ? "queued" : "processing");
     startPolling(result.task_id, isMulti);
   } catch (e) {
     btn.disabled = false;
@@ -569,6 +703,7 @@ function startPolling(taskId, isMulti) {
       if (task.status === "completed" && task.has_image) {
         clearInterval(pollingTimers[taskId]);
         delete pollingTimers[taskId];
+        g_activeTask = null;
         if (task.output_type === "video") {
           const blob = await API.getTaskVideo(taskId);
           showVideo(URL.createObjectURL(blob));
@@ -584,18 +719,21 @@ function startPolling(taskId, isMulti) {
       } else if (task.status === "failed") {
         clearInterval(pollingTimers[taskId]);
         delete pollingTimers[taskId];
+        g_activeTask = null;
         $("#btn-generate").disabled = false;
         $("#btn-generate").textContent = getGenerateButtonText();
         setStatus(t("failed") + ": " + (task.error || ""), "failed");
         await loadQuota();
       } else {
-        setStatus(t(task.status) + "... (" + task.task_id + ")", task.status);
+        g_activeTask = task;
+        setStatus(taskStatusText(task), task.status);
       }
     } catch (e) {
       console.error("Poll error:", e);
       if (e.status === 404) {
         clearInterval(pollingTimers[taskId]);
         delete pollingTimers[taskId];
+        g_activeTask = null;
         $("#btn-generate").disabled = false;
         $("#btn-generate").textContent = getGenerateButtonText();
         setStatus(t("taskNotFound") + ": " + taskId, "failed");
@@ -628,46 +766,51 @@ function setStatus(text, cls = "") {
   el.textContent = text;
   el.className = "status-text";
   if (cls) el.classList.add("status-" + cls);
-  if (cls === "processing") {
+  if (cls === "processing" || cls === "queued") {
     $("#preview-spinner").style.display = "block";
     $("#preview-placeholder").style.display = "none";
   }
 }
 
 // ---- Task History ----
+function renderTaskList(tasks) {
+  g_lastTasks = tasks;
+  const container = $("#task-list");
+  const sorted = tasks.sort((a, b) => b.created_at - a.created_at);
+  container.innerHTML = sorted.map(t => taskItemHtml(t)).join("");
+  container.querySelectorAll(".task-item").forEach(el => {
+    el.addEventListener("click", async () => {
+      const tid = el.dataset.taskId;
+      try {
+        const task = await API.getTask(tid);
+        if (task.status === "completed" && task.has_image) {
+          if (task.output_type === "video") {
+            const blob = await API.getTaskVideo(tid);
+            showVideo(URL.createObjectURL(blob));
+          } else {
+            const blob = await API.getTaskImage(tid);
+            showImage(URL.createObjectURL(blob));
+          }
+          setStatus(t("imageLoaded") + ": " + tid, "completed");
+        } else if (task.status === "processing" || task.status === "queued") {
+          startPolling(tid, currentWorkflow() === "multidraw");
+        }
+      } catch (e) {
+        if (e.status === 404) {
+          el.remove();
+          setStatus(t("taskNotFound") + ": " + tid, "failed");
+        } else {
+          console.error("Task load failed:", e);
+        }
+      }
+    });
+  });
+}
+
 async function refreshTaskList() {
   try {
     const tasks = await API.listTasks();
-    const container = $("#task-list");
-    const sorted = tasks.sort((a, b) => b.created_at - a.created_at);
-    container.innerHTML = sorted.map(t => taskItemHtml(t)).join("");
-    container.querySelectorAll(".task-item").forEach(el => {
-      el.addEventListener("click", async () => {
-        const tid = el.dataset.taskId;
-        try {
-          const task = await API.getTask(tid);
-          if (task.status === "completed" && task.has_image) {
-            if (task.output_type === "video") {
-              const blob = await API.getTaskVideo(tid);
-              showVideo(URL.createObjectURL(blob));
-            } else {
-              const blob = await API.getTaskImage(tid);
-              showImage(URL.createObjectURL(blob));
-            }
-            setStatus(t("imageLoaded") + ": " + tid, "completed");
-          } else if (task.status === "processing" || task.status === "queued") {
-            startPolling(tid, currentWorkflow() === "multidraw");
-          }
-        } catch (e) {
-          if (e.status === 404) {
-            el.remove();
-            setStatus(t("taskNotFound") + ": " + tid, "failed");
-          } else {
-            console.error("Task load failed:", e);
-          }
-        }
-      });
-    });
+    renderTaskList(tasks);
   } catch (e) { console.error("Failed to refresh tasks:", e); }
 }
 
@@ -718,6 +861,7 @@ async function init() {
   if (g_is_admin) {
     await loadOnlineCount();
   }
+  updateDrawCost();
   await refreshTaskList();
 }
 

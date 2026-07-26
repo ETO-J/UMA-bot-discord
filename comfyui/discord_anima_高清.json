@@ -1,0 +1,280 @@
+{
+  "61": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE"
+    }
+  },
+  "62": {
+    "inputs": {
+      "samples": [
+        "67",
+        0
+      ],
+      "vae": [
+        "61",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "63": {
+    "inputs": {
+      "width": 1024,
+      "height": 1536,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "空Latent图像"
+    }
+  },
+  "64": {
+    "inputs": {
+      "unet_name": "waiANIMA_v10Base10.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNet加载器"
+    }
+  },
+  "66": {
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "加载CLIP"
+    }
+  },
+  "67": {
+    "inputs": {
+      "seed": 1026137283871411,
+      "steps": 30,
+      "cfg": 4,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "73",
+        0
+      ],
+      "positive": [
+        "73",
+        1
+      ],
+      "negative": [
+        "68",
+        0
+      ],
+      "latent_image": [
+        "63",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "68": {
+    "inputs": {
+      "text": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia, censored,text, speech bubble, Mosaic, bad hands, bad fingers,bar censor,",
+      "clip": [
+        "66",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "(Negative Prompt)"
+    }
+  },
+  "72": {
+    "inputs": {
+      "artist_chain": "",
+      "base_prompt": "",
+      "clip": [
+        "66",
+        0
+      ]
+    },
+    "class_type": "AnimaArtistPack",
+    "_meta": {
+      "title": "Anima Artist Pack (Split + Encode)"
+    }
+  },
+  "73": {
+    "inputs": {
+      "combine_mode": "lowrank_avg",
+      "fusion_mode": "interpolate",
+      "strength": 1.5,
+      "enabled": true,
+      "apply_to_uncond": false,
+      "model": [
+        "64",
+        0
+      ],
+      "artist_pack": [
+        "72",
+        0
+      ],
+      "advanced_options": [
+        "74",
+        0
+      ]
+    },
+    "class_type": "AnimaArtistCrossAttn",
+    "_meta": {
+      "title": "Anima Artist Cross-Attn (v2)"
+    }
+  },
+  "74": {
+    "inputs": {
+      "start_block": 1,
+      "end_block": 13,
+      "start_percent": 0,
+      "end_percent": 0.5,
+      "normalize_weights": true,
+      "artist_ema_alpha": 0,
+      "lowrank_k": 1,
+      "artist_static_capture": false,
+      "static_capture_k": 6,
+      "artist_anchor_q": true,
+      "anchor_seeds_count": 1,
+      "anchor_user_blend": 0,
+      "anchor_deep_layer_threshold": -1,
+      "layer_filter": ""
+    },
+    "class_type": "AnimaArtistOptions",
+    "_meta": {
+      "title": "Anima Artist Options (Advanced)"
+    }
+  },
+  "82": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "scale_by": 1.5,
+      "image": [
+        "84",
+        0
+      ]
+    },
+    "class_type": "ImageScaleBy",
+    "_meta": {
+      "title": "缩放图像（比例）"
+    }
+  },
+  "83": {
+    "inputs": {
+      "pixels": [
+        "82",
+        0
+      ],
+      "vae": [
+        "61",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE编码"
+    }
+  },
+  "84": {
+    "inputs": {
+      "samples": [
+        "67",
+        0
+      ],
+      "vae": [
+        "61",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "85": {
+    "inputs": {
+      "seed": 414407517415880,
+      "steps": 15,
+      "cfg": 5,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 0.75,
+      "model": [
+        "64",
+        0
+      ],
+      "positive": [
+        "73",
+        1
+      ],
+      "negative": [
+        "68",
+        0
+      ],
+      "latent_image": [
+        "83",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "86": {
+    "inputs": {
+      "filename_prefix": "anima_高清",
+      "images": [
+        "88",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "87": {
+    "inputs": {
+      "images": [
+        "84",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "预览图像"
+    }
+  },
+  "88": {
+    "inputs": {
+      "samples": [
+        "85",
+        0
+      ],
+      "vae": [
+        "61",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  }
+}

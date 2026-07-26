@@ -488,7 +488,13 @@ button {
   margin-top: 10px;
   font-size: 13px;
   color: var(--fg2);
+  white-space: pre-line;
+  line-height: 1.6;
 }
+.status-queued { color: var(--yellow); }
+.status-processing { color: #60a5fa; }
+.status-completed { color: var(--green); }
+.status-failed { color: var(--red); }
 
 /* tabs */
 .tabs {

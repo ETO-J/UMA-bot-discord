@@ -50,7 +50,7 @@
   },
   "64": {
     "inputs": {
-      "unet_name": "animayume_v05.safetensors",
+      "unet_name": "waiANIMA_v10Base10.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",

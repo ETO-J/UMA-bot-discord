@@ -38,6 +38,7 @@ class Task:
     steps: int | None = None
     cfg: float | None = None
     output_type: str = "image"
+    comfyui_prompt_id: str | None = None
 
 
 class TaskQueue:
@@ -50,6 +51,9 @@ class TaskQueue:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self.cleanup_age = 3600
+        self._completed_durations: list[float] = []
+        self._processing_started: dict[str, float] = {}
+        self._comfyui_run_started: dict[str, float] = {}
         self._init_db()
 
     def _init_db(self):
@@ -239,7 +243,18 @@ class TaskQueue:
                 return
             for key, value in kwargs.items():
                 setattr(task, key, value)
-            if kwargs.get("status") == "completed" and task.image_bytes:
+            new_status = kwargs.get("status")
+            if new_status == "processing" and task_id not in self._processing_started:
+                self._processing_started[task_id] = time.time()
+            if new_status in ("completed", "failed") and task_id in self._processing_started:
+                duration = time.time() - self._processing_started.pop(task_id)
+                if new_status == "completed":
+                    self._completed_durations.append(duration)
+                    if len(self._completed_durations) > 20:
+                        self._completed_durations = self._completed_durations[-20:]
+            if new_status in ("completed", "failed") and task.comfyui_prompt_id:
+                self._comfyui_run_started.pop(task.comfyui_prompt_id, None)
+            if new_status == "completed" and task.image_bytes:
                 self._save_image_to_disk(task)
             self._persist_task(task)
 
@@ -293,6 +308,88 @@ class TaskQueue:
                 self._tasks.setdefault(task.task_id, task)
                 tasks.append(task)
         return tasks
+
+    @property
+    def _avg_processing_time(self) -> float | None:
+        if not self._completed_durations:
+            return None
+        return sum(self._completed_durations) / len(self._completed_durations)
+
+    async def get_queue_info(self, task_id: str) -> dict:
+        """Return real queue position / ETA based on the ComfyUI prompt queue.
+
+        The webapp forwards every task to ComfyUI immediately, so the real
+        waiting happens inside ComfyUI's own queue.  We locate the task's
+        ``comfyui_prompt_id`` in ``/queue`` to find its true position.
+        """
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if not task or task.status not in ("queued", "processing"):
+                return {}
+            pid = task.comfyui_prompt_id
+            output_type = task.output_type
+            created_at = task.created_at
+            started = self._processing_started.get(task_id)
+            ahead_fallback = len([
+                t for t in self._tasks.values()
+                if t.status in ("queued", "processing")
+                and t.created_at < created_at and t.task_id != task_id
+            ])
+            active_total = len([
+                t for t in self._tasks.values() if t.status in ("queued", "processing")
+            ])
+
+        # Lazy import to avoid any import-order issues at module load time.
+        from services.generator import fetch_comfyui_queue
+        queue = await fetch_comfyui_queue()
+        running, pending = queue["running"], queue["pending"]
+        comfy_total = len(running) + len(pending)
+
+        avg = self._avg_processing_time
+        if avg is None:
+            avg = 300.0 if output_type == "video" else 60.0
+
+        elapsed = round(time.time() - started, 1) if started else None
+
+        if pid and pid in running:
+            run_started = self._comfyui_run_started.setdefault(pid, time.time())
+            exec_elapsed = time.time() - run_started
+            remaining = max(0.0, avg - exec_elapsed)
+            return {
+                "queue_position": 0,
+                "queue_total": max(comfy_total, 1),
+                "estimated_seconds": round(remaining, 1),
+                "elapsed_seconds": elapsed,
+                "is_running": True,
+            }
+        if pid and pid in pending:
+            ahead = len(running) + pending.index(pid)
+            return {
+                "queue_position": ahead,
+                "queue_total": max(comfy_total, ahead + 1),
+                "estimated_seconds": round(ahead * avg, 1),
+                "elapsed_seconds": elapsed,
+                "is_running": False,
+            }
+
+        # Fallback: prompt not submitted to ComfyUI yet (workflow prep /
+        # image upload) or ComfyUI unreachable — estimate from webapp tasks.
+        if ahead_fallback == 0:
+            remaining = max(0.0, avg - (elapsed or 0))
+            return {
+                "queue_position": 0,
+                "queue_total": max(active_total, comfy_total, 1),
+                "estimated_seconds": round(remaining, 1),
+                "elapsed_seconds": elapsed,
+                "is_running": True,
+            }
+        return {
+            "queue_position": ahead_fallback,
+            "queue_total": max(active_total, comfy_total, ahead_fallback + 1),
+            "estimated_seconds": round(ahead_fallback * avg, 1),
+            "elapsed_seconds": elapsed,
+            "is_running": False,
+        }
 
 
 task_queue = TaskQueue()

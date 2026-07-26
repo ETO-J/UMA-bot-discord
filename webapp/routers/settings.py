@@ -4,6 +4,7 @@ from schemas.requests import (
     ResolutionRequest,
     NegativePromptRequest,
     ArtistChainRequest,
+    HdModeRequest,
     PartRequest,
     SettingsResponse,
 )
@@ -24,6 +25,7 @@ async def get_settings(user_id: str = Depends(get_current_user_id)):
         active_loras=s["active_loras"],
         part1=s.get("part1", [832, 608, 0, 0]),
         part2=s.get("part2", [832, 608, 832, 0]),
+        is_hd_mode=s.get("is_hd_mode", False),
     )
 
 
@@ -43,6 +45,12 @@ async def set_negative_prompt(req: NegativePromptRequest, user_id: str = Depends
 async def set_artist_chain(req: ArtistChainRequest, user_id: str = Depends(get_current_user_id)):
     wm.set_artist_chain(user_id, req.text)
     return {"status": "ok", "artist_chain": req.text}
+
+
+@router.put("/settings/hd_mode")
+async def set_hd_mode(req: HdModeRequest, user_id: str = Depends(get_current_user_id)):
+    wm.set_hd_mode(user_id, req.enabled)
+    return {"status": "ok", "is_hd_mode": req.enabled}
 
 
 @router.put("/settings/part1")

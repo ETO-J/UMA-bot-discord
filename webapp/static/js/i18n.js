@@ -53,6 +53,14 @@ const I18N = {
     completed: "已完成",
     failed: "失败",
     error: "错误",
+    queuePosition: "排队位置",
+    queueAhead: "前方",
+    queueTotal: "人中",
+    estimatedWait: "预计等待",
+    estimatedRemaining: "预计剩余",
+    elapsed: "已用时",
+    sec: "秒",
+    min: "分",
     promptRequired: "请输入提示词",
     allPromptsRequired: "请填写全部三个提示词",
     imageLoaded: "已加载历史图片",
@@ -76,6 +84,16 @@ const I18N = {
     videoNegPlaceholder: "留空使用工作流默认",
     firstFrameRequired: "请先上传首帧图像",
     cost: "消耗",
+    hdMode: "高清增强",
+    hdModeHint: "消耗 10 配额，放大+精炼生成更高质量图像",
+    workflowFlux2Edit: "Flux2 图像编辑 (Klein 9B)",
+    flux2Generate: "Flux2 编辑",
+    flux2PromptPlaceholder: "描述编辑目标...",
+    flux2SourceImage: "原图（必须）",
+    flux2SourceDropHint: "点击或拖拽上传原图",
+    flux2RefImage: "参考图（可选）",
+    flux2RefDropHint: "点击或拖拽上传参考图（可选）",
+    flux2SourceRequired: "请先上传原图",
   },
 
   en: {
@@ -132,6 +150,14 @@ const I18N = {
     completed: "Completed",
     failed: "Failed",
     error: "Error",
+    queuePosition: "Queue",
+    queueAhead: "",
+    queueTotal: "",
+    estimatedWait: "Est. wait",
+    estimatedRemaining: "Est. remaining",
+    elapsed: "Elapsed",
+    sec: "s",
+    min: "m",
     promptRequired: "Please enter a prompt",
     allPromptsRequired: "Please fill in all three prompts",
     imageLoaded: "Loaded history image",
@@ -155,6 +181,16 @@ const I18N = {
     videoNegPlaceholder: "Leave empty for workflow default",
     firstFrameRequired: "Please upload a first frame image",
     cost: "Cost",
+    hdMode: "HD Enhance",
+    hdModeHint: "Costs 10 quota. Upscale + refine for higher quality.",
+    workflowFlux2Edit: "Flux2 Image Edit (Klein 9B)",
+    flux2Generate: "Flux2 Edit",
+    flux2PromptPlaceholder: "Describe the edit goal...",
+    flux2SourceImage: "Source Image (required)",
+    flux2SourceDropHint: "Click or drag to upload source image",
+    flux2RefImage: "Reference Image (optional)",
+    flux2RefDropHint: "Click or drag to upload reference image (optional)",
+    flux2SourceRequired: "Please upload a source image first",
   },
 
   ja: {
@@ -211,6 +247,14 @@ const I18N = {
     completed: "完了",
     failed: "失敗",
     error: "エラー",
+    queuePosition: "待ち順位",
+    queueAhead: "前方",
+    queueTotal: "人",
+    estimatedWait: "推定待ち時間",
+    estimatedRemaining: "推定残り時間",
+    elapsed: "経過時間",
+    sec: "秒",
+    min: "分",
     promptRequired: "プロンプトを入力してください",
     allPromptsRequired: "3つのプロンプトをすべて入力してください",
     imageLoaded: "履歴画像を読み込みました",
@@ -234,6 +278,16 @@ const I18N = {
     videoNegPlaceholder: "空欄でワークフロー既定値",
     firstFrameRequired: "先頭フレーム画像をアップロードしてください",
     cost: "消費",
+    hdMode: "HDエンハンス",
+    hdModeHint: "10クォータ消費。アップスケール+精錬で高品質化。",
+    workflowFlux2Edit: "Flux2 画像編集 (Klein 9B)",
+    flux2Generate: "Flux2 編集",
+    flux2PromptPlaceholder: "編集目標を記述...",
+    flux2SourceImage: "元画像（必須）",
+    flux2SourceDropHint: "クリックまたはドラッグで元画像をアップロード",
+    flux2RefImage: "参照画像（任意）",
+    flux2RefDropHint: "クリックまたはドラッグで参照画像をアップロード（任意）",
+    flux2SourceRequired: "元画像を先にアップロードしてください",
   }
 };
 
@@ -307,6 +361,20 @@ function updateLangagedUI() {
   const onlineEl = document.getElementById("online-display");
   if (onlineEl && onlineEl.dataset.raw) {
     onlineEl.textContent = t("online") + ": " + onlineEl.dataset.raw;
+  }
+
+  // Re-render the queue/task status text (queue position, estimated wait,
+  // elapsed time) in the newly selected language.
+  if (typeof g_activeTask !== "undefined" && g_activeTask &&
+      (g_activeTask.status === "queued" || g_activeTask.status === "processing") &&
+      typeof taskStatusText === "function" && typeof setStatus === "function") {
+    setStatus(taskStatusText(g_activeTask), g_activeTask.status);
+  }
+
+  // Re-render task history items (queued/processing statuses etc.).
+  if (typeof g_lastTasks !== "undefined" && g_lastTasks &&
+      typeof renderTaskList === "function") {
+    renderTaskList(g_lastTasks);
   }
 
 }

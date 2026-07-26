@@ -38,6 +38,14 @@ const API = {
     });
   },
 
+  async setHdMode(enabled) {
+    return this._json("/settings/hd_mode", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+  },
+
   async multidrawAsync(prompt1, prompt2, globalPrompt, advanced = {}) {
     const body = { prompt1, prompt2, global_prompt: globalPrompt, ...advanced };
     Object.keys(body).forEach(k => {
@@ -67,6 +75,24 @@ const API = {
       if (body[k] === "" || body[k] === null || body[k] === undefined) delete body[k];
     });
     return this._json("/video/async", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+
+  async flux2EditAsync(prompt, sourceImage, referenceImage, negativePrompt, advanced = {}) {
+    const body = {
+      prompt,
+      source_image: sourceImage,
+      reference_image: referenceImage || null,
+      negative_prompt: negativePrompt || null,
+      ...advanced,
+    };
+    Object.keys(body).forEach(k => {
+      if (body[k] === "" || body[k] === null || body[k] === undefined) delete body[k];
+    });
+    return this._json("/flux2_edit/async", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

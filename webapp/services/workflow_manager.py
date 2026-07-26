@@ -189,6 +189,16 @@ class WorkflowManager:
             )
             self._conn.commit()
 
+    def set_hd_mode(self, user_id: str, enabled: bool):
+        with self._lock:
+            self.get_user_settings(user_id)
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE user_settings SET is_hd_mode=? WHERE user_id=?",
+                (1 if enabled else 0, user_id),
+            )
+            self._conn.commit()
+
     def set_part1(self, user_id: str, part: list):
         with self._lock:
             self.get_user_settings(user_id)

@@ -21,6 +21,32 @@ from services.workflow_manager import wm
 logger = logging.getLogger(__name__)
 
 _WS_TIMEOUT = 600.0
+_QUEUE_CACHE_TTL = 2.0
+_comfy_queue_cache: tuple[float, dict] | None = None
+
+
+async def fetch_comfyui_queue() -> dict:
+    """Fetch the real ComfyUI prompt queue (short TTL cache).
+
+    Returns ``{"running": [prompt_id, ...], "pending": [prompt_id, ...]}``.
+    """
+    global _comfy_queue_cache
+    now = time.monotonic()
+    if _comfy_queue_cache is not None and now - _comfy_queue_cache[0] < _QUEUE_CACHE_TTL:
+        return _comfy_queue_cache[1]
+    result = {"running": [], "pending": []}
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"{COMFYUI_URL}/queue") as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    result["running"] = [e[1] for e in data.get("queue_running", []) if len(e) > 1]
+                    result["pending"] = [e[1] for e in data.get("queue_pending", []) if len(e) > 1]
+    except Exception as e:
+        logger.warning("Failed to fetch ComfyUI queue: %s", e)
+    _comfy_queue_cache = (now, result)
+    return result
 
 
 async def move_generated_file(filename: str, subfolder: str = "") -> bool:
@@ -160,11 +186,14 @@ async def _submit_and_wait(
     session: aiohttp.ClientSession,
     workflow_data: dict,
     client_id: str,
+    on_prompt_submitted=None,
 ) -> bytes | None:
     """Submit *workflow_data* to ComfyUI and wait for the result image.
 
     Uses WebSocket for real-time completion detection, with automatic
     fall-back to HTTP ``/history`` polling when the WS connection fails.
+    *on_prompt_submitted* (async callable) is invoked with the ComfyUI
+    ``prompt_id`` right after the prompt is accepted.
     """
     payload = {"prompt": workflow_data, "client_id": client_id}
     ws_url = _comfyui_ws_url(client_id)
@@ -183,6 +212,12 @@ async def _submit_and_wait(
             resp_json = await response.json()
             prompt_id = resp_json.get("prompt_id")
 
+        if on_prompt_submitted is not None and prompt_id:
+            try:
+                await on_prompt_submitted(prompt_id)
+            except Exception as e:
+                logger.warning("on_prompt_submitted callback failed: %s", e)
+
         if ws is not None:
             file_info = await _listen_ws(ws, prompt_id)
             if file_info is None:
@@ -199,6 +234,117 @@ async def _submit_and_wait(
     return None
 
 
+def _inject_hd_nodes(workflow_data: dict, config: dict) -> None:
+    """Inject upscale + refine nodes into *workflow_data* for HD mode.
+
+    Chain: existing VAEDecode -> ImageScaleBy -> VAEEncode -> KSampler(refine)
+           -> VAEDecode -> SaveImage (redirected).
+
+    Modifies *workflow_data* in-place.
+    """
+    hd_id = config["hd_start_id"]
+    scale = config.get("hd_scale", 1.5)
+    upscale_method = config.get("hd_upscale_method", "nearest-exact")
+    hd_steps = config.get("hd_steps", 15)
+    hd_cfg = config.get("hd_cfg", 5.0)
+    hd_denoise = config.get("hd_denoise", 0.75)
+
+    # Find the SaveImage node and the VAEDecode it currently references.
+    save_node_id = None
+    first_decode_id = None
+    vae_source = None
+    for nid, ndata in workflow_data.items():
+        if ndata.get("class_type") == "SaveImage":
+            save_node_id = nid
+            images_ref = ndata.get("inputs", {}).get("images")
+            if images_ref:
+                first_decode_id = str(images_ref[0])
+            break
+    if not save_node_id or not first_decode_id:
+        logger.warning("HD inject: SaveImage or first VAEDecode not found")
+        return
+
+    first_decode = workflow_data.get(first_decode_id)
+    if not first_decode:
+        logger.warning("HD inject: first VAEDecode node %s not found", first_decode_id)
+        return
+
+    # Reuse the VAE connection from the first VAEDecode.
+    vae_source = first_decode["inputs"].get("vae")
+    if not vae_source:
+        logger.warning("HD inject: no VAE source on VAEDecode %s", first_decode_id)
+        return
+
+    # Find the first KSampler to replicate model / positive / negative connections.
+    first_ksampler = None
+    for nid, ndata in workflow_data.items():
+        if ndata.get("class_type") == "KSampler":
+            first_ksampler = ndata
+            break
+    if not first_ksampler:
+        logger.warning("HD inject: no KSampler found")
+        return
+
+    model_src = first_ksampler["inputs"]["model"]
+    positive_src = first_ksampler["inputs"]["positive"]
+    negative_src = first_ksampler["inputs"]["negative"]
+
+    scale_id = str(hd_id)
+    encode_id = str(hd_id + 1)
+    ksampler_id = str(hd_id + 2)
+    decode_id = str(hd_id + 3)
+
+    workflow_data[scale_id] = {
+        "inputs": {
+            "upscale_method": upscale_method,
+            "scale_by": scale,
+            "image": [first_decode_id, 0],
+        },
+        "class_type": "ImageScaleBy",
+        "_meta": {"title": "HD Upscale"},
+    }
+
+    workflow_data[encode_id] = {
+        "inputs": {
+            "pixels": [scale_id, 0],
+            "vae": list(vae_source),
+        },
+        "class_type": "VAEEncode",
+        "_meta": {"title": "HD VAE Encode"},
+    }
+
+    workflow_data[ksampler_id] = {
+        "inputs": {
+            "seed": random.randint(1, 1000000000),
+            "steps": hd_steps,
+            "cfg": hd_cfg,
+            "sampler_name": first_ksampler["inputs"].get("sampler_name", "er_sde"),
+            "scheduler": first_ksampler["inputs"].get("scheduler", "simple"),
+            "denoise": hd_denoise,
+            "model": list(model_src),
+            "positive": list(positive_src),
+            "negative": list(negative_src),
+            "latent_image": [encode_id, 0],
+        },
+        "class_type": "KSampler",
+        "_meta": {"title": "HD Refine Sampler"},
+    }
+
+    workflow_data[decode_id] = {
+        "inputs": {
+            "samples": [ksampler_id, 0],
+            "vae": list(vae_source),
+        },
+        "class_type": "VAEDecode",
+        "_meta": {"title": "HD VAEDecode"},
+    }
+
+    # Redirect SaveImage to the final HD decode.
+    workflow_data[save_node_id]["inputs"]["images"] = [decode_id, 0]
+    logger.info("HD nodes injected: %s -> %s -> %s -> %s -> SaveImage(%s)",
+                first_decode_id, scale_id, encode_id, ksampler_id, save_node_id)
+
+
 async def generate_image(
     input_prompt: str,
     user_id: str,
@@ -208,6 +354,8 @@ async def generate_image(
     scheduler: str | None = None,
     steps: int | None = None,
     cfg: float | None = None,
+    hd_mode: bool = False,
+    on_prompt_submitted=None,
 ) -> bytes | None:
     target_name = workflow_name or "discord_anima_v2"
 
@@ -312,10 +460,13 @@ async def generate_image(
             node_data["inputs"]["width"] = target_width
             node_data["inputs"]["height"] = target_height
 
+    if hd_mode and config.get("hd_enabled"):
+        _inject_hd_nodes(workflow_data, config)
+
     client_id = str(uuid.uuid4())
     try:
         async with aiohttp.ClientSession() as session:
-            return await _submit_and_wait(session, workflow_data, client_id)
+            return await _submit_and_wait(session, workflow_data, client_id, on_prompt_submitted)
     except Exception as e:
         logger.error("Draw exception: %s", e)
         return None
@@ -331,6 +482,7 @@ async def generate_multidraw_image(
     scheduler: str | None = None,
     steps: int | None = None,
     cfg: float | None = None,
+    on_prompt_submitted=None,
 ) -> bytes | None:
     user_settings = wm.get_user_settings(user_id)
     workflow_data = wm.load_workflow_data("multidraw")
@@ -433,7 +585,7 @@ async def generate_multidraw_image(
     client_id = str(uuid.uuid4())
     try:
         async with aiohttp.ClientSession() as session:
-            return await _submit_and_wait(session, workflow_data, client_id)
+            return await _submit_and_wait(session, workflow_data, client_id, on_prompt_submitted)
     except Exception as e:
         logger.error("Multidraw exception: %s", e)
         return None
@@ -478,6 +630,7 @@ async def generate_video(
     lora_strength: float,
     seed: int | None = None,
     negative_prompt: str | None = None,
+    on_prompt_submitted=None,
 ) -> bytes | None:
     workflow_data = wm.load_workflow_data("webui_video")
     if not workflow_data:
@@ -549,7 +702,139 @@ async def generate_video(
             for ks_id in config["ksampler_ids"]:
                 workflow_data[ks_id]["inputs"]["noise_seed"] = actual_seed
 
-            return await _submit_and_wait(session, workflow_data, client_id)
+            return await _submit_and_wait(session, workflow_data, client_id, on_prompt_submitted)
     except Exception as e:
         logger.error("Video generation exception: %s", e)
+        return None
+
+
+def _inject_flux2_reference_chain(workflow_data: dict, config: dict, ref_image_filename: str) -> None:
+    """Inject a second image-reference chain into the Flux2 workflow.
+
+    Adds: LoadImage -> ImageScaleToTotalPixels -> VAEEncode
+          -> ReferenceLatent(pos) chained after existing reference_pos
+          -> ReferenceLatent(neg) chained after existing reference_neg
+    Rewires CFGGuider to use the new chained outputs.
+
+    Node IDs start at ``config["ref_chain_start_id"]`` (3000).
+    """
+    rid = config["ref_chain_start_id"]
+    vae_src = list(config["vae_source"])
+
+    load_id = str(rid)
+    scale_id = str(rid + 1)
+    encode_id = str(rid + 2)
+    ref_pos_id = str(rid + 3)
+    ref_neg_id = str(rid + 4)
+
+    workflow_data[load_id] = {
+        "inputs": {"image": ref_image_filename},
+        "class_type": "LoadImage",
+        "_meta": {"title": "Ref Image"},
+    }
+
+    workflow_data[scale_id] = {
+        "inputs": {
+            "upscale_method": "lanczos",
+            "megapixels": 1,
+            "resolution_steps": 1,
+            "image": [load_id, 0],
+        },
+        "class_type": "ImageScaleToTotalPixels",
+        "_meta": {"title": "Ref Scale"},
+    }
+
+    workflow_data[encode_id] = {
+        "inputs": {
+            "pixels": [scale_id, 0],
+            "vae": vae_src,
+        },
+        "class_type": "VAEEncode",
+        "_meta": {"title": "Ref VAE Encode"},
+    }
+
+    # Chain: existing ref_pos -> new ref_pos
+    workflow_data[ref_pos_id] = {
+        "inputs": {
+            "conditioning": [config["reference_pos_node_id"], 0],
+            "latent": [encode_id, 0],
+        },
+        "class_type": "ReferenceLatent",
+        "_meta": {"title": "Ref Latent (pos)"},
+    }
+
+    # Chain: existing ref_neg -> new ref_neg
+    workflow_data[ref_neg_id] = {
+        "inputs": {
+            "conditioning": [config["reference_neg_node_id"], 0],
+            "latent": [encode_id, 0],
+        },
+        "class_type": "ReferenceLatent",
+        "_meta": {"title": "Ref Latent (neg)"},
+    }
+
+    # Rewire CFGGuider to the new chain ends
+    guider_id = config["guider_node_id"]
+    workflow_data[guider_id]["inputs"]["positive"] = [ref_pos_id, 0]
+    workflow_data[guider_id]["inputs"]["negative"] = [ref_neg_id, 0]
+
+    logger.info("Flux2 reference chain injected: %s..%s", load_id, ref_neg_id)
+
+
+async def generate_flux2_edit_image(
+    prompt: str,
+    source_image_b64: str,
+    reference_image_b64: str | None,
+    user_id: str,
+    negative_prompt: str | None = None,
+    seed: int | None = None,
+    steps: int | None = None,
+    cfg: float | None = None,
+    sampler_name: str | None = None,
+    on_prompt_submitted=None,
+) -> bytes | None:
+    workflow_data = wm.load_workflow_data("discord_flux2_9b_edit")
+    if not workflow_data:
+        logger.error("Cannot load discord_flux2_9b_edit workflow")
+        return None
+
+    config = WORKFLOW_CONFIGS["discord_flux2_9b_edit"]
+
+    client_id = str(uuid.uuid4())
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Upload source image (required)
+            source_filename = await _upload_image(session, source_image_b64)
+            if not source_filename:
+                logger.error("Failed to upload source image")
+                return None
+            workflow_data[config["load_image_node_id"]]["inputs"]["image"] = source_filename
+
+            # Upload and inject reference image (optional)
+            if reference_image_b64:
+                ref_filename = await _upload_image(session, reference_image_b64)
+                if not ref_filename:
+                    logger.error("Failed to upload reference image")
+                    return None
+                _inject_flux2_reference_chain(workflow_data, config, ref_filename)
+
+            # Set prompts
+            workflow_data[config["pos_node_id"]]["inputs"]["text"] = prompt
+            neg_text = negative_prompt or ""
+            workflow_data[config["neg_node_id"]]["inputs"]["text"] = neg_text
+
+            # Set sampling parameters
+            actual_seed = seed if seed is not None else random.randint(1, 1000000000)
+            workflow_data[config["noise_node_id"]]["inputs"]["noise_seed"] = actual_seed
+
+            if steps is not None:
+                workflow_data[config["scheduler_node_id"]]["inputs"]["steps"] = steps
+            if cfg is not None:
+                workflow_data[config["guider_node_id"]]["inputs"]["cfg"] = cfg
+            if sampler_name:
+                workflow_data[config["sampler_select_node_id"]]["inputs"]["sampler_name"] = sampler_name
+
+            return await _submit_and_wait(session, workflow_data, client_id, on_prompt_submitted)
+    except Exception as e:
+        logger.error("Flux2 edit generation exception: %s", e)
         return None

@@ -3,9 +3,9 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import Response
 
-from schemas.requests import DrawRequest, MultidrawRequest, VideoRequest, TaskResponse
+from schemas.requests import DrawRequest, MultidrawRequest, VideoRequest, Flux2EditRequest, TaskResponse
 from services.workflow_manager import wm
-from services.generator import generate_image, generate_multidraw_image, generate_video
+from services.generator import generate_image, generate_multidraw_image, generate_video, generate_flux2_edit_image
 from services.task_queue import task_queue
 from dependencies import get_current_user_id
 from config import VIDEO_RESOLUTIONS, VIDEO_BASE_COST, VIDEO_FPS
@@ -14,15 +14,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["draw"])
 
 DEFAULT_WORKFLOW = "discord_anima_v2"
+HD_COST = 10
 
 
 @router.post("/draw", response_class=Response)
 async def draw_sync(req: DrawRequest, user_id: str = Depends(get_current_user_id)):
     user_settings = wm.get_user_settings(user_id)
+    cost = HD_COST if req.hd_mode else 1
     remaining = user_settings["limit_count"] - user_settings["used_today"]
-    if remaining < 1:
+    if remaining < cost:
         raise HTTPException(status_code=429, detail=f"Quota exhausted: {user_settings['used_today']}/{user_settings['limit_count']}")
-    if not wm.use_quota(user_id, 1):
+    if not wm.use_quota(user_id, cost):
         raise HTTPException(status_code=429, detail="Quota check failed")
 
     try:
@@ -30,16 +32,17 @@ async def draw_sync(req: DrawRequest, user_id: str = Depends(get_current_user_id
             req.prompt, user_id, DEFAULT_WORKFLOW,
             seed=req.seed, sampler_name=req.sampler_name,
             scheduler=req.scheduler, steps=req.steps, cfg=req.cfg,
+            hd_mode=req.hd_mode,
         )
         if image_bytes:
             return Response(content=image_bytes, media_type="image/png")
         else:
-            wm.refund_quota(user_id, 1)
+            wm.refund_quota(user_id, cost)
             raise HTTPException(status_code=500, detail="Image generation failed")
     except HTTPException:
         raise
     except Exception as e:
-        wm.refund_quota(user_id, 1)
+        wm.refund_quota(user_id, cost)
         logger.error("Draw failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -47,10 +50,11 @@ async def draw_sync(req: DrawRequest, user_id: str = Depends(get_current_user_id
 @router.post("/draw/async", response_model=TaskResponse)
 async def draw_async(req: DrawRequest, user_id: str = Depends(get_current_user_id)):
     user_settings = wm.get_user_settings(user_id)
+    cost = HD_COST if req.hd_mode else 1
     remaining = user_settings["limit_count"] - user_settings["used_today"]
-    if remaining < 1:
-        raise HTTPException(status_code=429, detail=f"Quota exhausted: {user_settings['used_today']}/{user_settings['limit_count']}")
-    if not wm.use_quota(user_id, 1):
+    if remaining < cost:
+        raise HTTPException(status_code=429, detail=f"Quota exhausted: need {cost}, have {remaining}")
+    if not wm.use_quota(user_id, cost):
         raise HTTPException(status_code=429, detail="Quota check failed")
 
     task = await task_queue.create_task(
@@ -61,23 +65,27 @@ async def draw_async(req: DrawRequest, user_id: str = Depends(get_current_user_i
 
     async def process():
         await task_queue.update_task(task.task_id, status="processing")
+        async def _on_submit(pid: str):
+            await task_queue.update_task(task.task_id, comfyui_prompt_id=pid)
         try:
             result = await generate_image(
                 req.prompt, user_id, DEFAULT_WORKFLOW,
                 seed=req.seed, sampler_name=req.sampler_name,
                 scheduler=req.scheduler, steps=req.steps, cfg=req.cfg,
+                hd_mode=req.hd_mode,
+                on_prompt_submitted=_on_submit,
             )
             if result:
                 await task_queue.update_task(task.task_id, status="completed", image_bytes=result)
             else:
-                wm.refund_quota(user_id, 1)
+                wm.refund_quota(user_id, cost)
                 await task_queue.update_task(task.task_id, status="failed", error="Generation returned no data")
         except Exception as e:
-            wm.refund_quota(user_id, 1)
+            wm.refund_quota(user_id, cost)
             await task_queue.update_task(task.task_id, status="failed", error=str(e))
 
     asyncio.create_task(process())
-    return _task_to_response(task)
+    return await _task_to_response_with_queue(task)
 
 
 @router.post("/multidraw", response_class=Response)
@@ -125,11 +133,14 @@ async def multidraw_async(req: MultidrawRequest, user_id: str = Depends(get_curr
 
     async def process():
         await task_queue.update_task(task.task_id, status="processing")
+        async def _on_submit(pid: str):
+            await task_queue.update_task(task.task_id, comfyui_prompt_id=pid)
         try:
             result = await generate_multidraw_image(
                 req.prompt1, req.prompt2, req.global_prompt, user_id,
                 seed=req.seed, sampler_name=req.sampler_name,
                 scheduler=req.scheduler, steps=req.steps, cfg=req.cfg,
+                on_prompt_submitted=_on_submit,
             )
             if result:
                 await task_queue.update_task(task.task_id, status="completed", image_bytes=result)
@@ -141,7 +152,7 @@ async def multidraw_async(req: MultidrawRequest, user_id: str = Depends(get_curr
             await task_queue.update_task(task.task_id, status="failed", error=str(e))
 
     asyncio.create_task(process())
-    return _task_to_response(task)
+    return await _task_to_response_with_queue(task)
 
 
 def _video_cost(quality: str, duration: int) -> int:
@@ -169,6 +180,8 @@ async def video_async(req: VideoRequest, user_id: str = Depends(get_current_user
 
     async def process():
         await task_queue.update_task(task.task_id, status="processing")
+        async def _on_submit(pid: str):
+            await task_queue.update_task(task.task_id, comfyui_prompt_id=pid)
         try:
             result = await generate_video(
                 prompt=req.prompt,
@@ -179,6 +192,7 @@ async def video_async(req: VideoRequest, user_id: str = Depends(get_current_user
                 lora_strength=req.lora_strength,
                 seed=req.seed,
                 negative_prompt=req.negative_prompt,
+                on_prompt_submitted=_on_submit,
             )
             if result:
                 await task_queue.update_task(task.task_id, status="completed", image_bytes=result)
@@ -190,7 +204,56 @@ async def video_async(req: VideoRequest, user_id: str = Depends(get_current_user
             await task_queue.update_task(task.task_id, status="failed", error=str(e))
 
     asyncio.create_task(process())
-    return _task_to_response(task)
+    return await _task_to_response_with_queue(task)
+
+
+FLUX2_EDIT_COST = 20
+
+
+@router.post("/flux2_edit/async", response_model=TaskResponse)
+async def flux2_edit_async(req: Flux2EditRequest, user_id: str = Depends(get_current_user_id)):
+    cost = FLUX2_EDIT_COST
+    user_settings = wm.get_user_settings(user_id)
+    remaining = user_settings["limit_count"] - user_settings["used_today"]
+    if remaining < cost:
+        raise HTTPException(status_code=429, detail=f"Quota exhausted: need {cost}, have {remaining}")
+    if not wm.use_quota(user_id, cost):
+        raise HTTPException(status_code=429, detail="Quota check failed")
+
+    task = await task_queue.create_task(
+        user_id=user_id, prompt=req.prompt,
+        seed=req.seed, sampler_name=req.sampler_name,
+        steps=req.steps, cfg=req.cfg,
+    )
+
+    async def process():
+        await task_queue.update_task(task.task_id, status="processing")
+        async def _on_submit(pid: str):
+            await task_queue.update_task(task.task_id, comfyui_prompt_id=pid)
+        try:
+            result = await generate_flux2_edit_image(
+                prompt=req.prompt,
+                source_image_b64=req.source_image,
+                reference_image_b64=req.reference_image,
+                user_id=user_id,
+                negative_prompt=req.negative_prompt,
+                seed=req.seed,
+                steps=req.steps,
+                cfg=req.cfg,
+                sampler_name=req.sampler_name,
+                on_prompt_submitted=_on_submit,
+            )
+            if result:
+                await task_queue.update_task(task.task_id, status="completed", image_bytes=result)
+            else:
+                wm.refund_quota(user_id, cost)
+                await task_queue.update_task(task.task_id, status="failed", error="Flux2 edit generation returned no data")
+        except Exception as e:
+            wm.refund_quota(user_id, cost)
+            await task_queue.update_task(task.task_id, status="failed", error=str(e))
+
+    asyncio.create_task(process())
+    return await _task_to_response_with_queue(task)
 
 
 def _task_to_response(t) -> TaskResponse:
@@ -211,12 +274,24 @@ def _task_to_response(t) -> TaskResponse:
     )
 
 
+async def _task_to_response_with_queue(t) -> TaskResponse:
+    resp = _task_to_response(t)
+    if t.status in ("queued", "processing"):
+        info = await task_queue.get_queue_info(t.task_id)
+        resp.queue_position = info.get("queue_position")
+        resp.queue_total = info.get("queue_total")
+        resp.estimated_seconds = info.get("estimated_seconds")
+        resp.elapsed_seconds = info.get("elapsed_seconds")
+        resp.is_running = info.get("is_running")
+    return resp
+
+
 @router.get("/task/{task_id}", response_model=TaskResponse)
 async def get_task_status(task_id: str):
     task = await task_queue.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return _task_to_response(task)
+    return await _task_to_response_with_queue(task)
 
 
 @router.get("/task/{task_id}/image")

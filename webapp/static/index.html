@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bourbon Webui</title>
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="/css/style.css?v=18">
 </head>
 <body>
 
@@ -33,6 +33,7 @@
         <option value="discord_anima_v2" data-i18n="workflowAnimaV2">Anima V2 (画师融合)</option>
         <option value="multidraw" data-i18n="workflowMultidraw">多角色合成 (Multidraw)</option>
         <option value="webui_video" data-i18n="workflowVideo">视频生成 (Wan2.2)</option>
+        <option value="discord_flux2_9b_edit" data-i18n="workflowFlux2Edit">Flux2 图像编辑 (Klein 9B)</option>
       </select>
     </div>
 
@@ -65,6 +66,13 @@
           <button class="btn-expand" data-target="txt-artist-chain" data-i18n-title="expandTitle">⤡</button>
         </div>
         <textarea id="txt-artist-chain" rows="2" data-i18n-placeholder="artistPlaceholder" placeholder="artist1, artist2, ..."></textarea>
+      </div>
+      <div class="section">
+        <label class="label">
+          <input type="checkbox" id="chk-hd-mode">
+          <span data-i18n="hdMode">高清增强</span>
+        </label>
+        <div style="font-size:11px;color:var(--fg2);margin-top:2px" data-i18n="hdModeHint">消耗 10 配额，放大+精炼生成更高质量图像</div>
       </div>
     </div>
 
@@ -168,6 +176,39 @@
       </div>
     </div>
 
+    <div id="fields-flux2" style="display:none">
+      <div class="section">
+        <div class="label-row">
+          <label class="label" data-i18n="prompt">提示词</label>
+          <button class="btn-expand" data-target="txt-flux2-prompt" data-i18n-title="expandTitle">⤡</button>
+        </div>
+        <textarea id="txt-flux2-prompt" rows="3" data-i18n-placeholder="flux2PromptPlaceholder" placeholder="描述编辑目标..."></textarea>
+      </div>
+      <div class="section">
+        <label class="label" data-i18n="flux2SourceImage">原图（必须）</label>
+        <div class="video-drop-zone" id="flux2-source-drop">
+          <input type="file" id="flux2-source-input" accept="image/*" hidden>
+          <img id="flux2-source-preview" class="video-preview-img" style="display:none">
+          <span id="flux2-source-placeholder" class="video-drop-text" data-i18n="flux2SourceDropHint">点击或拖拽上传原图</span>
+        </div>
+      </div>
+      <div class="section">
+        <label class="label" data-i18n="flux2RefImage">参考图（可选）</label>
+        <div class="video-drop-zone" id="flux2-ref-drop">
+          <input type="file" id="flux2-ref-input" accept="image/*" hidden>
+          <img id="flux2-ref-preview" class="video-preview-img" style="display:none">
+          <span id="flux2-ref-placeholder" class="video-drop-text" data-i18n="flux2RefDropHint">点击或拖拽上传参考图（可选）</span>
+        </div>
+      </div>
+      <div class="section">
+        <div class="label-row">
+          <label class="label" data-i18n="negativePrompt">负面提示词</label>
+          <button class="btn-expand" data-target="txt-flux2-negative" data-i18n-title="expandTitle">⤡</button>
+        </div>
+        <textarea id="txt-flux2-negative" rows="2" data-i18n-placeholder="videoNegPlaceholder" placeholder="留空使用默认"></textarea>
+      </div>
+    </div>
+
     <div class="section" id="section-negative">
       <div class="label-row">
         <label class="label" data-i18n="negativePrompt">负面提示词</label>
@@ -229,6 +270,9 @@
       </div>
     </div>
 
+    <div class="section" id="draw-cost-section" style="margin-bottom:4px">
+      <span class="label" id="draw-cost-display" style="color:var(--yellow);font-size:13px"></span>
+    </div>
     <button id="btn-generate" class="btn-primary btn-large" data-i18n="generate">生成</button>
   </aside>
 
@@ -269,8 +313,8 @@
   </div>
 </div>
 
-    <script src="/js/i18n.js?v=13"></script>
-    <script src="/js/api.js?v=13"></script>
-    <script src="/js/app.js?v=13"></script>
+    <script src="/js/i18n.js?v=18"></script>
+    <script src="/js/api.js?v=18"></script>
+    <script src="/js/app.js?v=18"></script>
 </body>
 </html>
