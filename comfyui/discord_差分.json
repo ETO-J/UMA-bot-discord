@@ -1,0 +1,165 @@
+{
+  "46": {
+    "inputs": {
+      "filename_prefix": "anima_差分",
+      "images": [
+        "62",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "61": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE"
+    }
+  },
+  "62": {
+    "inputs": {
+      "samples": [
+        "67",
+        0
+      ],
+      "vae": [
+        "61",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "64": {
+    "inputs": {
+      "unet_name": "waiANIMA_v10Base10.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNet加载器"
+    }
+  },
+  "66": {
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "加载CLIP"
+    }
+  },
+  "67": {
+    "inputs": {
+      "seed": 919183145028330,
+      "steps": 20,
+      "cfg": 4,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 0.7,
+      "model": [
+        "73",
+        0
+      ],
+      "positive": [
+        "73",
+        1
+      ],
+      "negative": [
+        "68",
+        0
+      ],
+      "latent_image": [
+        "79",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "68": {
+    "inputs": {
+      "text": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia, censored,text, speech bubble, Mosaic, bad hands, bad fingers,bar censor,",
+      "clip": [
+        "66",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "(Negative Prompt)"
+    }
+  },
+  "72": {
+    "inputs": {
+      "artist_chain": "",
+      "base_prompt": "m",
+      "clip": [
+        "66",
+        0
+      ]
+    },
+    "class_type": "AnimaArtistPack",
+    "_meta": {
+      "title": "Anima Artist Pack (Split + Encode)"
+    }
+  },
+  "73": {
+    "inputs": {
+      "combine_mode": "lowrank_avg",
+      "fusion_mode": "interpolate",
+      "strength": 1.5,
+      "enabled": true,
+      "apply_to_uncond": false,
+      "uncond_strength": 1,
+      "model": [
+        "64",
+        0
+      ],
+      "artist_pack": [
+        "72",
+        0
+      ]
+    },
+    "class_type": "AnimaArtistCrossAttn",
+    "_meta": {
+      "title": "Anima Artist Cross-Attn (v26 fixed)"
+    }
+  },
+  "78": {
+    "inputs": {
+      "image": "anima_高清_00091_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "79": {
+    "inputs": {
+      "pixels": [
+        "78",
+        0
+      ],
+      "vae": [
+        "61",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE编码"
+    }
+  }
+}

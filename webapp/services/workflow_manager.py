@@ -13,6 +13,8 @@ from config import (
     LORA_BASE_PATH,
     LORA_DIRS,
     LORA_ANIMA_DIRS,
+    LORA_VIDEO_DIRS,
+    ANIMA_WORKFLOWS,
 )
 
 logger = logging.getLogger(__name__)
@@ -241,7 +243,9 @@ class WorkflowManager:
             return None
 
     def _get_lora_dirs(self, workflow: str = None) -> list:
-        if workflow and "anima" in workflow:
+        if workflow == "webui_video":
+            return LORA_VIDEO_DIRS
+        if workflow and ("anima" in workflow or workflow in ANIMA_WORKFLOWS):
             return LORA_ANIMA_DIRS
         return LORA_DIRS
 
@@ -264,10 +268,11 @@ class WorkflowManager:
                     return f"{sub_dir}\\{f.name}"
         return None
 
-    def add_lora(self, user_id: str, lora_name: str, weight: float):
+    def add_lora(self, user_id: str, lora_name: str, weight: float, workflow: str | None = None):
         with self._lock:
             settings = self.get_user_settings(user_id)
-            workflow = settings.get("workflow", "discord_anima_v2")
+            if workflow is None:
+                workflow = settings.get("workflow", "discord_anima_v2")
             current_loras = settings["active_loras"]
             real_path = self.find_lora_path(lora_name, workflow)
             if real_path:

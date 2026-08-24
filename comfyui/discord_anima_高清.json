@@ -128,38 +128,15 @@
         "72",
         0
       ],
-      "advanced_options": [
-        "74",
-        0
-      ]
+      "uncond_strength":1
+     
     },
     "class_type": "AnimaArtistCrossAttn",
     "_meta": {
       "title": "Anima Artist Cross-Attn (v2)"
     }
   },
-  "74": {
-    "inputs": {
-      "start_block": 1,
-      "end_block": 13,
-      "start_percent": 0,
-      "end_percent": 0.5,
-      "normalize_weights": true,
-      "artist_ema_alpha": 0,
-      "lowrank_k": 1,
-      "artist_static_capture": false,
-      "static_capture_k": 6,
-      "artist_anchor_q": true,
-      "anchor_seeds_count": 1,
-      "anchor_user_blend": 0,
-      "anchor_deep_layer_threshold": -1,
-      "layer_filter": ""
-    },
-    "class_type": "AnimaArtistOptions",
-    "_meta": {
-      "title": "Anima Artist Options (Advanced)"
-    }
-  },
+ 
   "82": {
     "inputs": {
       "upscale_method": "nearest-exact",

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bourbon Webui</title>
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/css/style.css?v=18">
+<link rel="stylesheet" href="/css/style.css?v=27">
 </head>
 <body>
 
@@ -31,8 +31,9 @@
       <label class="label" data-i18n="workflow">工作流</label>
       <select id="sel-workflow">
         <option value="discord_anima_v2" data-i18n="workflowAnimaV2">Anima V2 (画师融合)</option>
+        <option value="discord_差分" data-i18n="workflowDiff">Anima 差分 (图生图)</option>
         <option value="multidraw" data-i18n="workflowMultidraw">多角色合成 (Multidraw)</option>
-        <option value="webui_video" data-i18n="workflowVideo">视频生成 (Wan2.2)</option>
+        <option value="webui_video" data-i18n="workflowVideo">视频生成 (MiniMax H3)</option>
         <option value="discord_flux2_9b_edit" data-i18n="workflowFlux2Edit">Flux2 图像编辑 (Klein 9B)</option>
       </select>
     </div>
@@ -73,6 +74,17 @@
           <span data-i18n="hdMode">高清增强</span>
         </label>
         <div style="font-size:11px;color:var(--fg2);margin-top:2px" data-i18n="hdModeHint">消耗 10 配额，放大+精炼生成更高质量图像</div>
+      </div>
+    </div>
+
+    <div id="fields-diff-image" style="display:none">
+      <div class="section">
+        <label class="label" data-i18n="diffSourceImage">底图（必须）</label>
+        <div class="video-drop-zone" id="diff-source-drop">
+          <input type="file" id="diff-source-input" accept="image/*" hidden>
+          <img id="diff-source-preview" class="video-preview-img" style="display:none">
+          <span id="diff-source-placeholder" class="video-drop-text" data-i18n="diffSourceDropHint">点击或拖拽上传底图</span>
+        </div>
       </div>
     </div>
 
@@ -158,21 +170,19 @@
           <option value="4">4s</option>
           <option value="5" selected>5s</option>
           <option value="6">6s</option>
+          <option value="7">7s</option>
+          <option value="8">8s</option>
+          <option value="9">9s</option>
+          <option value="10">10s</option>
+          <option value="11">11s</option>
+          <option value="12">12s</option>
+          <option value="13">13s</option>
+          <option value="14">14s</option>
+          <option value="15">15s</option>
         </select>
       </div>
       <div class="section">
         <span class="label" id="video-cost-display" style="color:var(--yellow);font-size:13px"></span>
-      </div>
-      <div class="section">
-        <label class="label">
-          <input type="checkbox" id="chk-video-lora" checked>
-          <span data-i18n="videoEnhance">动态增强</span>
-        </label>
-        <div class="lora-strength-row" id="video-lora-strength-row">
-          <span data-i18n="videoEnhanceStrength" style="font-size:12px;color:var(--fg2)">强度</span>
-          <input type="range" id="rng-video-lora" min="0" max="1" step="0.05" value="0.7">
-          <input type="number" id="num-video-lora" value="0.70" min="0" max="1" step="0.05" style="width:55px">
-        </div>
       </div>
     </div>
 
@@ -225,14 +235,8 @@
         <label class="label" data-i18n="seed">种子</label>
         <input type="number" id="txt-seed" value="-1" min="-1">
       </div>
-      <div id="adv-video-fields" style="display:none">
-        <div class="section">
-          <div class="label-row">
-            <label class="label" data-i18n="negativePrompt">负面提示词</label>
-            <button class="btn-expand" data-target="txt-video-negative" data-i18n-title="expandTitle">⤡</button>
-          </div>
-          <textarea id="txt-video-negative" rows="2" data-i18n-placeholder="videoNegPlaceholder" placeholder="留空使用工作流默认"></textarea>
-        </div>
+      <div class="section adv-video-only">
+        <button id="btn-open-video-lora" class="adv-toggle" data-i18n="videoLoraManage">视频 LoRA ▸</button>
       </div>
       <div class="section adv-image-only">
         <label class="label" data-i18n="sampler">采样器</label>
@@ -264,6 +268,14 @@
           <option value="ddim_uniform">ddim_uniform</option>
           <option value="beta">beta</option>
         </select>
+      </div>
+      <div class="section adv-diff-only">
+        <label class="label" data-i18n="diffStrength">差分强度</label>
+        <div class="denoise-row">
+          <input type="range" id="rng-diff-strength" min="0" max="1" step="0.05" value="0.7">
+          <span class="diff-strength-val" id="diff-strength-val">0.70</span>
+        </div>
+        <div class="hint" data-i18n="diffStrengthHint">数值越大，图像与原图差异越大</div>
       </div>
       <div class="section adv-image-only" id="section-lora-btn">
         <button id="btn-open-lora" class="adv-toggle" data-i18n="loraManage">管理 LoRA ▸</button>
@@ -313,8 +325,36 @@
   </div>
 </div>
 
-    <script src="/js/i18n.js?v=18"></script>
-    <script src="/js/api.js?v=18"></script>
-    <script src="/js/app.js?v=18"></script>
+<!-- AI Drawing Assistant Chat Bubble -->
+<div id="chat-bubble" class="chat-bubble" data-i18n-title="chatBubbleTitle" title="AI 绘画助手">
+  <img src="/images/chat-icon.png" class="chat-bubble-img" alt="AI" onerror="this.style.display='none';document.getElementById('chat-bubble-svg').style.display='block'">
+  <svg id="chat-bubble-svg" class="chat-bubble-icon" style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+  </svg>
+  <span class="chat-bubble-label" data-i18n="chatBubbleLabel">AI助手</span>
+</div>
+
+<!-- AI Drawing Assistant Chat Panel -->
+<div id="chat-panel" class="chat-panel" style="display:none">
+  <div class="chat-header">
+    <span class="chat-header-title" data-i18n="chatTitle">AI 绘画助手</span>
+    <button id="chat-minimize" class="chat-close">&minus;</button>
+  </div>
+  <div id="chat-messages" class="chat-messages">
+    <div class="chat-welcome" data-i18n="chatWelcome">你好！我是绘画助手，可以帮你将想法转化为精准的英文绘图提示词。试着告诉我你想画什么吧~</div>
+  </div>
+  <div class="chat-input-row">
+    <textarea id="chat-input" rows="1" data-i18n-placeholder="chatPlaceholder" placeholder="描述你的绘图想法..."></textarea>
+    <button id="chat-send" class="chat-send-btn" data-i18n="chatSend">发送</button>
+  </div>
+  <div class="chat-footer">
+    <button id="chat-clear" class="chat-clear-btn" data-i18n="chatClear">清除对话</button>
+  </div>
+</div>
+
+    <script src="/js/i18n.js?v=27"></script>
+    <script src="/js/api.js?v=27"></script>
+    <script src="/js/chat.js?v=27"></script>
+    <script src="/js/app.js?v=27"></script>
 </body>
 </html>

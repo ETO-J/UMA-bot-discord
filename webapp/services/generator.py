@@ -16,13 +16,23 @@ from config import (
     VIDEO_RESOLUTIONS,
     VIDEO_FPS,
 )
+from services.task_queue import task_queue
 from services.workflow_manager import wm
 
 logger = logging.getLogger(__name__)
 
-_WS_TIMEOUT = 600.0
+_WS_TIMEOUT = 1800.0
 _QUEUE_CACHE_TTL = 2.0
 _comfy_queue_cache: tuple[float, dict] | None = None
+
+# --- Output move / sweep tuning ---
+_MOVE_RETRY_SECONDS = 30.0
+_MOVE_RETRY_INTERVAL = 1.0
+_SWEEP_MIN_AGE_SECONDS = 60.0
+
+# Strong references for fire-and-forget move tasks so the event loop never
+# garbage-collects them mid-flight.
+_move_tasks: set[asyncio.Task] = set()
 
 
 async def fetch_comfyui_queue() -> dict:
@@ -50,6 +60,20 @@ async def fetch_comfyui_queue() -> dict:
 
 
 async def move_generated_file(filename: str, subfolder: str = "") -> bool:
+    """Move a generated file out of the ComfyUI output dir, retrying on failure.
+
+    Windows often briefly locks a freshly written file (antivirus scan,
+    Explorer preview, the just-finished HTTP response), which raises
+    WinError 32.  This function retries for ``_MOVE_RETRY_SECONDS`` instead of
+    giving up after the first error.
+
+    It is also safe when two services (webapp + Discord bot) race on the same
+    file:
+    - source missing + destination present  -> already moved, success
+    - destination present + source present  -> the destination is overwritten
+      with the freshly generated source (ComfyUI may reuse counter names after
+      the previous file was moved away)
+    """
     if subfolder:
         source_path = COMFYUI_OUTPUT_DIR / subfolder / filename
         dest_dir = IMAGE_SAVE_PATH / subfolder
@@ -58,20 +82,121 @@ async def move_generated_file(filename: str, subfolder: str = "") -> bool:
         source_path = COMFYUI_OUTPUT_DIR / filename
         dest_dir = IMAGE_SAVE_PATH
     dest_path = dest_dir / filename
-    max_wait, interval, waited = 30, 1, 0
-    while waited < max_wait:
-        if source_path.exists():
-            try:
-                shutil.move(str(source_path), str(dest_path))
-                logger.info("File moved: %s/%s", subfolder or ".", filename)
+
+    deadline = time.monotonic() + _MOVE_RETRY_SECONDS
+    last_error: Exception | None = None
+    copied = False
+    while time.monotonic() < deadline:
+        if not source_path.exists():
+            if dest_path.exists():
+                # Another process (or a previous attempt) already moved it.
+                _mark_moved(filename, subfolder)
                 return True
-            except Exception as e:
-                logger.error("Failed to move file: %s", e)
-                return False
-        else:
-            await asyncio.sleep(interval)
-            waited += interval
+            await asyncio.sleep(_MOVE_RETRY_INTERVAL)
+            continue
+
+        try:
+            if dest_path.exists():
+                # Destination collision: the fresh source must win, so copy
+                # over the stale destination, then remove the source.
+                if not copied:
+                    await asyncio.to_thread(shutil.copy2, str(source_path), str(dest_path))
+                    copied = True
+                await asyncio.to_thread(source_path.unlink)
+                logger.info("File moved (replaced existing): %s/%s", subfolder or ".", filename)
+                _mark_moved(filename, subfolder)
+                return True
+            await asyncio.to_thread(shutil.move, str(source_path), str(dest_path))
+            logger.info("File moved: %s/%s", subfolder or ".", filename)
+            _mark_moved(filename, subfolder)
+            return True
+        except FileNotFoundError:
+            # Lost the race: someone else moved/removed the source between
+            # exists() and the move.  Only a success if the dest now exists.
+            if dest_path.exists():
+                _mark_moved(filename, subfolder)
+                return True
+            last_error = None
+        except OSError as e:
+            last_error = e
+        except Exception as e:
+            last_error = e
+        await asyncio.sleep(_MOVE_RETRY_INTERVAL)
+
+    logger.error(
+        "Failed to move file %s after %.0fs%s: %s",
+        filename,
+        _MOVE_RETRY_SECONDS,
+        f" (subfolder={subfolder})" if subfolder else "",
+        last_error or "file never appeared",
+    )
     return False
+
+
+def _mark_moved(filename: str, subfolder: str = "") -> None:
+    """Drop the registry entry once a generated file is safely archived."""
+    try:
+        task_queue.unregister_generated_file(filename, subfolder)
+    except Exception as e:
+        logger.warning("Failed to unregister moved file %s: %s", filename, e)
+
+
+def _log_move_task_result(task: asyncio.Task) -> None:
+    """Done-callback: surface crashes of the fire-and-forget move tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Move task crashed: %s", exc)
+
+
+def _spawn_move_task(filename: str, subfolder: str = "") -> None:
+    """Fire-and-forget the output move while keeping a strong reference."""
+    task = asyncio.create_task(move_generated_file(filename, subfolder))
+    _move_tasks.add(task)
+    task.add_done_callback(_move_tasks.discard)
+    task.add_done_callback(_log_move_task_result)
+
+
+async def sweep_leftover_outputs(min_age: float = _SWEEP_MIN_AGE_SECONDS) -> int:
+    """Self-heal: move leftover files that the webapp/bot actually generated.
+
+    Uses the ``generated_files`` registry (populated when each generation's
+    outputs are handled) instead of filename prefixes, so videos or images
+    produced by manually run local ComfyUI workflows — even ones sharing the
+    same prefix — are never touched.  Files younger than *min_age* seconds
+    are skipped so the move never races with ComfyUI writing/serving them.
+    Returns the number of files moved.
+    """
+    try:
+        registered = task_queue.get_generated_files()
+    except Exception as e:
+        logger.warning("Sweep: cannot read generated_files registry: %s", e)
+        return 0
+    if not registered:
+        return 0
+    by_subfolder: dict[str, list[str]] = {}
+    for filename, subfolder in registered:
+        by_subfolder.setdefault(subfolder or "", []).append(filename)
+    moved = 0
+    for subfolder, names in by_subfolder.items():
+        base_dir = COMFYUI_OUTPUT_DIR / subfolder
+        if not base_dir.is_dir():
+            continue
+        for filename in names:
+            entry = base_dir / filename
+            try:
+                if not entry.is_file():
+                    continue
+                if time.time() - entry.stat().st_mtime < min_age:
+                    continue
+            except OSError:
+                continue
+            if await move_generated_file(filename, subfolder):
+                moved += 1
+    if moved:
+        logger.info("Sweep: moved %d leftover file(s) from ComfyUI output", moved)
+    return moved
 
 
 def _comfyui_ws_url(client_id: str) -> str:
@@ -85,13 +210,45 @@ def _comfyui_ws_url(client_id: str) -> str:
     return f"{ws_base}/ws?clientId={client_id}"
 
 
-async def _listen_ws(ws, prompt_id: str) -> dict | None:
+def _collect_outputs(output: dict, container: list[dict]) -> None:
+    """Append every persisted output file from a ComfyUI output dict.
+
+    Only files with ``type == "output"`` (SaveImage / SaveVideo) are kept;
+    temp previews (PreviewImage) are skipped because they live in ComfyUI's
+    temp dir and are not ours to move.  Duplicate (filename, subfolder)
+    pairs are dropped.
+    """
+    if not isinstance(output, dict):
+        return
+    for key in ("images", "gifs", "videos"):
+        for item in output.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type", "output") != "output":
+                continue
+            filename = item.get("filename")
+            if not filename:
+                continue
+            subfolder = item.get("subfolder", "") or ""
+            if any(f["filename"] == filename and f["subfolder"] == subfolder for f in container):
+                continue
+            container.append(
+                {"filename": filename, "subfolder": subfolder, "type": "output"}
+            )
+
+
+async def _listen_ws(ws, prompt_id: str) -> list[dict] | None:
     """Listen on the ComfyUI WebSocket for *prompt_id* completion.
 
-    Returns a dict with ``filename``, ``subfolder``, ``type`` keys,
-    or ``None`` on failure / no output.
+    Returns a list of output file dicts (``filename`` / ``subfolder`` /
+    ``type``) covering every persisted output node of the prompt, or
+    ``None`` on failure / no output.  ``None`` is also returned when the
+    connection drops or the time budget is exhausted before the prompt
+    finishes, so the caller can fall back to HTTP ``/history`` polling.
+    Previews (type "temp") are excluded.
     """
-    file_info = None
+    file_infos: list[dict] = []
+    completed = False
     start = time.monotonic()
     try:
         while True:
@@ -107,18 +264,10 @@ async def _listen_ws(ws, prompt_id: str) -> dict | None:
                 if mdata.get("prompt_id") != prompt_id:
                     continue
                 if mtype == "executed":
-                    output = mdata.get("output", {})
-                    for key in ("images", "gifs", "videos"):
-                        items = output.get(key)
-                        if items:
-                            file_info = {
-                                "filename": items[0].get("filename"),
-                                "subfolder": items[0].get("subfolder", ""),
-                                "type": items[0].get("type", "output"),
-                            }
-                            break
+                    _collect_outputs(mdata.get("output", {}), file_infos)
                 elif mtype == "executing" and mdata.get("node") is None:
-                    return file_info
+                    completed = True
+                    break
                 elif mtype in ("execution_error", "execution_interrupted"):
                     logger.error("ComfyUI %s for prompt %s: %s", mtype, prompt_id, mdata)
                     return None
@@ -129,11 +278,15 @@ async def _listen_ws(ws, prompt_id: str) -> dict | None:
         logger.error("WS receive timeout for prompt %s", prompt_id)
     except Exception as e:
         logger.error("WS listen failed: %s", e)
-    return file_info
+    return file_infos if completed else None
 
 
-async def _poll_history(session: aiohttp.ClientSession, prompt_id: str) -> dict | None:
-    """Fallback: poll ComfyUI /history for completion."""
+async def _poll_history(session: aiohttp.ClientSession, prompt_id: str) -> list[dict] | None:
+    """Fallback: poll ComfyUI /history for completion.
+
+    Returns a list of output file dicts (same shape as ``_listen_ws``), or
+    ``None`` on failure / no output.
+    """
     start = time.monotonic()
     while time.monotonic() - start < _WS_TIMEOUT:
         await asyncio.sleep(1)
@@ -143,27 +296,31 @@ async def _poll_history(session: aiohttp.ClientSession, prompt_id: str) -> dict 
                     continue
                 history_data = await history_resp.json()
                 if prompt_id in history_data:
+                    file_infos: list[dict] = []
                     outputs = history_data[prompt_id].get("outputs", {})
                     for out_node in outputs.values():
-                        for key in ("images", "gifs", "videos"):
-                            items = out_node.get(key)
-                            if items:
-                                return {
-                                    "filename": items[0].get("filename"),
-                                    "subfolder": items[0].get("subfolder", ""),
-                                    "type": items[0].get("type", "output"),
-                                }
-                    return None
+                        _collect_outputs(out_node, file_infos)
+                    return file_infos
         except Exception as e:
             logger.error("Polling error for prompt %s: %s", prompt_id, e)
     logger.error("Polling timeout for prompt %s", prompt_id)
     return None
 
 
-async def _download_output(session: aiohttp.ClientSession, file_info: dict) -> bytes | None:
-    filename = file_info["filename"]
-    subfolder = file_info.get("subfolder", "")
-    file_type = file_info.get("type", "output")
+async def _download_output(session: aiohttp.ClientSession, file_infos: list[dict]) -> bytes | None:
+    """Download the primary output and schedule the move of every output file.
+
+    The first persisted output is returned to the caller; *all* persisted
+    outputs (e.g. batch generations) are moved out of the ComfyUI output dir
+    so nothing accumulates there.  Previews are already filtered out by
+    ``_collect_outputs``.
+    """
+    if not file_infos:
+        return None
+    primary = file_infos[0]
+    filename = primary["filename"]
+    subfolder = primary.get("subfolder", "")
+    file_type = primary.get("type", "output")
     params = {"filename": filename}
     if subfolder:
         params["subfolder"] = subfolder
@@ -175,11 +332,16 @@ async def _download_output(session: aiohttp.ClientSession, file_info: dict) -> b
                 logger.error("Failed to download %s: HTTP %s", filename, resp.status)
                 return None
             data = await resp.read()
-            asyncio.create_task(move_generated_file(filename, subfolder))
-            return data
     except Exception as e:
         logger.error("Download exception: %s", e)
         return None
+    for info in file_infos:
+        try:
+            task_queue.register_generated_file(info["filename"], info.get("subfolder", ""))
+        except Exception as e:
+            logger.warning("Failed to register generated file %s: %s", info["filename"], e)
+        _spawn_move_task(info["filename"], info.get("subfolder", ""))
+    return data
 
 
 async def _submit_and_wait(
@@ -220,7 +382,7 @@ async def _submit_and_wait(
 
         if ws is not None:
             file_info = await _listen_ws(ws, prompt_id)
-            if file_info is None:
+            if not file_info:
                 logger.info("WS returned no output, falling back to polling for %s", prompt_id)
                 file_info = await _poll_history(session, prompt_id)
         else:
@@ -355,6 +517,8 @@ async def generate_image(
     steps: int | None = None,
     cfg: float | None = None,
     hd_mode: bool = False,
+    denoise: float | None = None,
+    source_image_b64: str | None = None,
     on_prompt_submitted=None,
 ) -> bytes | None:
     target_name = workflow_name or "discord_anima_v2"
@@ -440,6 +604,8 @@ async def generate_image(
                 node_data["inputs"]["steps"] = steps
             if cfg is not None:
                 node_data["inputs"]["cfg"] = cfg
+            if denoise is not None:
+                node_data["inputs"]["denoise"] = denoise
             node_data["inputs"]["negative"] = [neg_node_id, 0]
             if bridging_model_node:
                 node_data["inputs"]["model"] = [bridging_model_node, 0]
@@ -466,6 +632,22 @@ async def generate_image(
     client_id = str(uuid.uuid4())
     try:
         async with aiohttp.ClientSession() as session:
+            if source_image_b64:
+                # img2img / diff: upload the base image and point the workflow's
+                # LoadImage node at it before encoding into the latent.
+                filename = await _upload_image(session, source_image_b64)
+                if not filename:
+                    logger.error("Failed to upload diff source image")
+                    return None
+                load_node = config.get("load_image_node_id")
+                if load_node and load_node in workflow_data:
+                    workflow_data[load_node]["inputs"]["image"] = filename
+                else:
+                    logger.warning(
+                        "Load image node %s not found for workflow %s",
+                        load_node,
+                        target_name,
+                    )
             return await _submit_and_wait(session, workflow_data, client_id, on_prompt_submitted)
     except Exception as e:
         logger.error("Draw exception: %s", e)
@@ -600,7 +782,15 @@ async def _upload_image(session: aiohttp.ClientSession, image_b64: str) -> str |
         return None
     try:
         form = aiohttp.FormData()
-        form.add_field("image", image_bytes, filename="webui_upload.png", content_type="image/png")
+        # Unique filename: concurrent uploads (video start/end frames, Flux2
+        # source/reference images) must never overwrite each other, or a queued
+        # task would load another user's image.
+        form.add_field(
+            "image",
+            image_bytes,
+            filename=f"webui_{uuid.uuid4().hex}.png",
+            content_type="image/png",
+        )
         async with session.post(f"{COMFYUI_URL}/upload/image", data=form) as resp:
             if resp.status != 200:
                 logger.error("Image upload failed: HTTP %s", resp.status)
@@ -619,6 +809,19 @@ async def _upload_image(session: aiohttp.ClientSession, image_b64: str) -> str |
         return None
 
 
+def _align_h3_frames(length: int) -> int:
+    """Snap a frame count up to MiniMax H3's 17k+5 grid (124 = ~5s)."""
+    n = max(5, int(length))
+    while n % 17 != 5:
+        n += 1
+    return n
+
+
+def _snap_h3_dim(value: int) -> int:
+    """Snap a canvas dimension to the nearest multiple of 32 (H3 latent pad)."""
+    return max(32, round(int(value) / 32.0) * 32)
+
+
 async def generate_video(
     prompt: str,
     start_image_b64: str,
@@ -626,23 +829,22 @@ async def generate_video(
     width: int,
     height: int,
     length: int,
-    lora_enabled: bool,
-    lora_strength: float,
+    user_id: str,
     seed: int | None = None,
-    negative_prompt: str | None = None,
     on_prompt_submitted=None,
 ) -> bytes | None:
-    workflow_data = wm.load_workflow_data("webui_video")
+    config = WORKFLOW_CONFIGS["webui_video"]
+    workflow_name = config.get("workflow_file", "webui_video")
+    workflow_data = wm.load_workflow_data(workflow_name)
     if not workflow_data:
-        logger.error("Cannot load webui_video workflow")
+        logger.error("Cannot load %s workflow", workflow_name)
         return None
 
-    config = WORKFLOW_CONFIGS["webui_video"]
     video_node_id = config["video_node_id"]
     start_image_node_id = config["start_image_node_id"]
     end_image_node_id = config["end_image_node_id"]
-    pos_node_id = config["pos_node_id"]
-    neg_node_id = config["neg_node_id"]
+    seed_node_id = config["seed_node_id"]
+    prompt_field = config.get("prompt_field", "prompt")
 
     client_id = str(uuid.uuid4())
     try:
@@ -659,48 +861,64 @@ async def generate_video(
                     logger.error("Failed to upload end image")
                     return None
 
-            has_end_frame = end_filename is not None
-
             workflow_data[start_image_node_id]["inputs"]["image"] = start_filename
 
-            if has_end_frame:
+            if end_filename:
                 workflow_data[end_image_node_id]["inputs"]["image"] = end_filename
             else:
-                workflow_data[video_node_id]["class_type"] = config["video_node_class_first"]
-                workflow_data[video_node_id]["inputs"].pop("end_image", None)
+                workflow_data[video_node_id]["inputs"].pop("last_frame", None)
                 if end_image_node_id in workflow_data:
                     del workflow_data[end_image_node_id]
 
-            workflow_data[video_node_id]["inputs"]["width"] = width
-            workflow_data[video_node_id]["inputs"]["height"] = height
-            workflow_data[video_node_id]["inputs"]["length"] = length
+            node_inputs = workflow_data[video_node_id]["inputs"]
+            node_inputs[prompt_field] = prompt
+            # MiniMax H3's latent is width/16 x height/16 and patchify_video
+            # needs both to be even, i.e. width/height must be multiples of 32.
+            # Guard against any non-32-multiple dimension reaching ComfyUI.
+            canvas_w = _snap_h3_dim(width)
+            canvas_h = _snap_h3_dim(height)
+            if (canvas_w, canvas_h) != (width, height):
+                logger.info("H3 canvas snapped %sx%s -> %sx%s", width, height, canvas_w, canvas_h)
+            node_inputs["width"] = canvas_w
+            node_inputs["height"] = canvas_h
+            node_inputs["length"] = _align_h3_frames(length)
 
-            workflow_data[pos_node_id]["inputs"]["text"] = prompt
-
-            if negative_prompt:
-                workflow_data[neg_node_id]["inputs"]["text"] = negative_prompt
-
-            lora_high_id = config["lora_high_node_id"]
-            lora_low_id = config["lora_low_node_id"]
-            high_chain_source = config["high_chain_source"]
-            low_chain_source = config["low_chain_source"]
-            high_chain_target = config["high_chain_target"]
-            low_chain_target = config["low_chain_target"]
-
-            if lora_enabled:
-                workflow_data[lora_high_id]["inputs"]["strength_model"] = lora_strength
-                workflow_data[lora_low_id]["inputs"]["strength_model"] = lora_strength
-            else:
-                if lora_high_id in workflow_data:
-                    del workflow_data[lora_high_id]
-                if lora_low_id in workflow_data:
-                    del workflow_data[lora_low_id]
-                workflow_data[high_chain_target]["inputs"]["model"] = list(high_chain_source)
-                workflow_data[low_chain_target]["inputs"]["model"] = list(low_chain_source)
+            active_loras = wm.get_user_settings(user_id).get("active_loras", {})
+            base_lora_id = config.get("base_lora_node_id")
+            if base_lora_id and active_loras:
+                model_source = list(config["model_source"])
+                clip_source = list(config["clip_source"])
+                start_id = config["lora_start_id"]
+                injected = 0
+                for lora_name, weight in active_loras.items():
+                    lora_path = wm.find_lora_path(lora_name, "webui_video")
+                    if not lora_path:
+                        continue
+                    node_id = str(start_id)
+                    workflow_data[node_id] = {
+                        "inputs": {
+                            "lora_name": lora_path,
+                            "strength_model": weight,
+                            "strength_clip": weight,
+                            "model": model_source,
+                            "clip": clip_source,
+                        },
+                        "class_type": "LoraLoader",
+                        "_meta": {"title": f"DynamicLora_{lora_name}"},
+                    }
+                    model_source = [node_id, 0]
+                    clip_source = [node_id, 1]
+                    start_id += 1
+                    injected += 1
+                if injected:
+                    workflow_data[base_lora_id]["inputs"]["model"] = model_source
+                    workflow_data[base_lora_id]["inputs"]["clip"] = clip_source
+                    logger.info(
+                        "Injected %d video LoRA(s) before base node %s", injected, base_lora_id
+                    )
 
             actual_seed = seed if seed is not None else random.randint(1, 1000000000)
-            for ks_id in config["ksampler_ids"]:
-                workflow_data[ks_id]["inputs"]["noise_seed"] = actual_seed
+            workflow_data[seed_node_id]["inputs"]["noise_seed"] = actual_seed
 
             return await _submit_and_wait(session, workflow_data, client_id, on_prompt_submitted)
     except Exception as e:

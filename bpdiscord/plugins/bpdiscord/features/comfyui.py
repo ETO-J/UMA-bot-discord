@@ -4,13 +4,14 @@ import uuid
 import asyncio
 import random
 import os
+import time
 import sqlite3
 import aiohttp
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
-from nonebot import on_message
+from nonebot import on_message, get_driver, require
 from nonebot.adapters.discord import Bot, MessageEvent
 from nonebot_plugin_alconna import UniMessage
 from nonebot.log import logger
@@ -18,6 +19,9 @@ from nonebot.log import logger
 from ..config import COMFYUI_DIR, is_admin as _is_admin, is_blacklisted
 
 load_dotenv()
+
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
 
 # --- ComfyUI 路径配置 ---
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://127.0.0.1:8000")
@@ -322,28 +326,199 @@ class WorkflowManager:
         conn.commit()
         conn.close()
 
+    def register_generated_file(self, filename: str, subfolder: str = "") -> None:
+        """登记一个由 bot/webui 实际生成的输出文件。
+
+        清扫程序只移动登记表中的文件，因此本地 ComfyUI 手动工作流产出的
+        同名文件（例如同样前缀的视频）永远不会被误移。
+        """
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS generated_files (
+                    filename TEXT NOT NULL,
+                    subfolder TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (filename, subfolder)
+                )
+            """)
+            cursor.execute(
+                "INSERT OR IGNORE INTO generated_files (filename, subfolder, created_at) "
+                "VALUES (?, ?, ?)",
+                (filename, subfolder or "", time.time()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def unregister_generated_file(self, filename: str, subfolder: str = "") -> None:
+        """文件已归档后移除登记。"""
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM generated_files WHERE filename=? AND subfolder=?",
+                (filename, subfolder or ""),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_generated_files(self) -> list:
+        """返回所有已登记的 (filename, subfolder) 列表。"""
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS generated_files (
+                    filename TEXT NOT NULL,
+                    subfolder TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (filename, subfolder)
+                )
+            """)
+            cursor.execute("SELECT filename, subfolder FROM generated_files")
+            return [(row[0], row[1]) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
 
 wm = WorkflowManager()
 
 
-# ========== 图片移动 ==========
-async def move_generated_image(img_name: str) -> bool:
-    source_path = COMFYUI_OUTPUT_DIR / img_name
-    dest_path = IMAGE_SAVE_PATH / img_name
-    max_wait, interval, waited = 30, 1, 0
-    while waited < max_wait:
-        if source_path.exists():
-            try:
-                shutil.move(str(source_path), str(dest_path))
-                logger.info(f"成功移动图片: {img_name}")
+# ========== 图片移动（带重试，处理 Windows 文件占用） ==========
+_MOVE_RETRY_SECONDS = 30.0
+_MOVE_RETRY_INTERVAL = 1.0
+_SWEEP_MIN_AGE_SECONDS = 60.0
+_move_tasks: set[asyncio.Task] = set()
+
+
+async def move_generated_image(img_name: str, subfolder: str = "") -> bool:
+    """移动生成图片到存档目录，失败时持续重试。
+
+    Windows 上刚写完的文件可能被短暂占用（杀软扫描 / 资源管理器预览 /
+    ComfyUI 响应句柄未释放）导致 WinError 32，这里会重试 30 秒而不是
+    第一次失败就放弃。同时兼容两个服务（webapp + bot）同时移动同一文件：
+    - 源已消失但目标存在 -> 视为已移动成功
+    - 目标已存在但源还在 -> 用新生成的源覆盖目标（ComfyUI 计数器可能复用）
+    """
+    source_path = COMFYUI_OUTPUT_DIR / subfolder / img_name
+    dest_dir = IMAGE_SAVE_PATH / subfolder
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / img_name
+
+    deadline = time.monotonic() + _MOVE_RETRY_SECONDS
+    last_error: Exception | None = None
+    copied = False
+    while time.monotonic() < deadline:
+        if not source_path.exists():
+            if dest_path.exists():
+                # 其他进程或之前的尝试已经移走
+                _mark_moved(img_name, subfolder)
                 return True
-            except Exception as e:
-                logger.error(f"移动图片失败: {e}")
-                return False
-        else:
-            await asyncio.sleep(interval)
-            waited += interval
+            await asyncio.sleep(_MOVE_RETRY_INTERVAL)
+            continue
+
+        try:
+            if dest_path.exists():
+                # 目标同名冲突：新生成的源文件优先，覆盖目标后删除源
+                if not copied:
+                    shutil.copy2(str(source_path), str(dest_path))
+                    copied = True
+                source_path.unlink()
+                logger.info(f"成功移动图片(覆盖旧文件): {img_name}")
+                _mark_moved(img_name, subfolder)
+                return True
+            shutil.move(str(source_path), str(dest_path))
+            logger.info(f"成功移动图片: {img_name}")
+            _mark_moved(img_name, subfolder)
+            return True
+        except FileNotFoundError:
+            # 竞争失败：源在 exists() 与 move 之间被移走
+            if dest_path.exists():
+                _mark_moved(img_name, subfolder)
+                return True
+            last_error = None
+        except OSError as e:
+            last_error = e
+        except Exception as e:
+            last_error = e
+        await asyncio.sleep(_MOVE_RETRY_INTERVAL)
+
+    logger.error(f"移动图片失败(重试{int(_MOVE_RETRY_SECONDS)}s后): {img_name} - {last_error or '文件未出现'}")
     return False
+
+
+def _mark_moved(img_name: str, subfolder: str = "") -> None:
+    """文件归档成功后移除登记。"""
+    try:
+        wm.unregister_generated_file(img_name, subfolder)
+    except Exception as e:
+        logger.warning(f"注销已移动文件失败: {img_name} - {e}")
+
+
+def _log_move_task_result(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(f"移动图片任务异常: {exc}")
+
+
+def _spawn_move_task(img_name: str, subfolder: str = "") -> None:
+    """后台移动图片并持有任务引用，避免任务被 GC。"""
+    task = asyncio.create_task(move_generated_image(img_name, subfolder))
+    _move_tasks.add(task)
+    task.add_done_callback(_move_tasks.discard)
+    task.add_done_callback(_log_move_task_result)
+
+
+async def sweep_leftover_outputs(min_age: float = _SWEEP_MIN_AGE_SECONDS) -> int:
+    """自愈：只移走 bot/webui 实际生成（已登记）的遗留文件。
+
+    基于 generated_files 登记表而不是文件名前缀判断，因此本地 ComfyUI
+    手动工作流的同名视频/图片（例如相同前缀）永远不会被误移。
+    """
+    try:
+        registered = wm.get_generated_files()
+    except Exception as e:
+        logger.warning(f"清扫失败: 无法读取登记表: {e}")
+        return 0
+    if not registered:
+        return 0
+    by_subfolder: dict = {}
+    for filename, subfolder in registered:
+        by_subfolder.setdefault(subfolder or "", []).append(filename)
+    moved = 0
+    for subfolder, names in by_subfolder.items():
+        base_dir = COMFYUI_OUTPUT_DIR / subfolder
+        if not base_dir.is_dir():
+            continue
+        for filename in names:
+            entry = base_dir / filename
+            try:
+                if not entry.is_file():
+                    continue
+                if time.time() - entry.stat().st_mtime < min_age:
+                    continue
+            except OSError:
+                continue
+            if await move_generated_image(filename, subfolder):
+                moved += 1
+    if moved:
+        logger.info(f"清扫完成: 已移动 {moved} 个遗留文件")
+    return moved
+
+
+@scheduler.scheduled_job("interval", minutes=5, id="comfyui_output_sweep")
+async def _scheduled_output_sweep():
+    await sweep_leftover_outputs()
+
+
+@get_driver().on_startup
+async def _startup_output_sweep():
+    await sweep_leftover_outputs()
 
 
 # ========== 核心生成函数 ==========
@@ -466,14 +641,31 @@ async def generate_image(input_prompt: str, user_id: str, workflow_name: str = N
                         history_data = await history_resp.json()
                         if prompt_id in history_data:
                             outputs = history_data[prompt_id].get("outputs", {})
+                            all_images: list[dict] = []
                             for out_node in outputs.values():
-                                if "images" in out_node:
-                                    img_name = out_node["images"][0].get("filename")
-                                    async with session.get(f"{COMFYUI_URL}/view", params={"filename": img_name}) as img_resp:
-                                        if img_resp.status == 200:
-                                            image_bytes = await img_resp.read()
-                                            asyncio.create_task(move_generated_image(img_name))
-                                            return image_bytes
+                                for item in out_node.get("images", []):
+                                    fname = item.get("filename")
+                                    if not fname:
+                                        continue
+                                    subfolder = item.get("subfolder", "") or ""
+                                    if any(f["filename"] == fname and f["subfolder"] == subfolder for f in all_images):
+                                        continue
+                                    all_images.append({"filename": fname, "subfolder": subfolder})
+                            if all_images:
+                                primary = all_images[0]
+                                params = {"filename": primary["filename"]}
+                                if primary["subfolder"]:
+                                    params["subfolder"] = primary["subfolder"]
+                                async with session.get(f"{COMFYUI_URL}/view", params=params) as img_resp:
+                                    if img_resp.status == 200:
+                                        image_bytes = await img_resp.read()
+                                        for img in all_images:
+                                            try:
+                                                wm.register_generated_file(img["filename"], img["subfolder"])
+                                            except Exception as e:
+                                                logger.warning(f"登记生成文件失败: {img['filename']} - {e}")
+                                            _spawn_move_task(img["filename"], img["subfolder"])
+                                        return image_bytes
                             break
     except Exception as e:
         logger.error(f"绘图异常: {e}")
@@ -589,14 +781,31 @@ async def generate_multidraw_image(prompt1: str, prompt2: str, global_prompt: st
                         history_data = await history_resp.json()
                         if prompt_id in history_data:
                             outputs = history_data[prompt_id].get("outputs", {})
+                            all_images: list[dict] = []
                             for out_node in outputs.values():
-                                if "images" in out_node:
-                                    img_name = out_node["images"][0].get("filename")
-                                    async with session.get(f"{COMFYUI_URL}/view", params={"filename": img_name}) as img_resp:
-                                        if img_resp.status == 200:
-                                            image_bytes = await img_resp.read()
-                                            asyncio.create_task(move_generated_image(img_name))
-                                            return image_bytes
+                                for item in out_node.get("images", []):
+                                    fname = item.get("filename")
+                                    if not fname:
+                                        continue
+                                    subfolder = item.get("subfolder", "") or ""
+                                    if any(f["filename"] == fname and f["subfolder"] == subfolder for f in all_images):
+                                        continue
+                                    all_images.append({"filename": fname, "subfolder": subfolder})
+                            if all_images:
+                                primary = all_images[0]
+                                params = {"filename": primary["filename"]}
+                                if primary["subfolder"]:
+                                    params["subfolder"] = primary["subfolder"]
+                                async with session.get(f"{COMFYUI_URL}/view", params=params) as img_resp:
+                                    if img_resp.status == 200:
+                                        image_bytes = await img_resp.read()
+                                        for img in all_images:
+                                            try:
+                                                wm.register_generated_file(img["filename"], img["subfolder"])
+                                            except Exception as e:
+                                                logger.warning(f"登记生成文件失败: {img['filename']} - {e}")
+                                            _spawn_move_task(img["filename"], img["subfolder"])
+                                        return image_bytes
                             break
     except Exception as e:
         logger.error(f"多角色绘图异常: {e}")

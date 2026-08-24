@@ -48,6 +48,7 @@ let g_videoOrientation = "portrait";
 let g_hdMode = false;
 let g_flux2SourceImage = null;
 let g_flux2RefImage = null;
+let g_diffSourceImage = null;
 
 // Last queued/processing task shown in the preview area, and the last
 // fetched task list — both used to re-render texts on language switch.
@@ -136,7 +137,7 @@ async function loadQuota() {
 
 async function loadLoraList() {
   try {
-    const data = await API.getLoraList();
+    const data = await API.getLoraList(currentWorkflow());
     renderLoraGallery(data);
   } catch (e) {
     console.error("Failed to load lora list:", e);
@@ -172,6 +173,7 @@ function getGenerateButtonText() {
   if (wf === "multidraw") return t("multidrawGenerate");
   if (wf === "webui_video") return t("videoGenerate");
   if (wf === "discord_flux2_9b_edit") return t("flux2Generate");
+  if (wf === "discord_差分") return t("diffGenerate");
   return t("generate");
 }
 
@@ -180,23 +182,28 @@ function switchWorkflowUI() {
   const isMulti = wf === "multidraw";
   const isVideo = wf === "webui_video";
   const isFlux2 = wf === "discord_flux2_9b_edit";
+  const isDiff = wf === "discord_差分";
 
   $("#fields-anima").style.display = (isMulti || isVideo || isFlux2) ? "none" : "";
+  $("#fields-diff-image").style.display = isDiff ? "" : "none";
   $("#fields-multidraw").style.display = isMulti ? "" : "none";
   $("#fields-video").style.display = isVideo ? "" : "none";
   $("#fields-flux2").style.display = isFlux2 ? "" : "none";
 
   const resSection = document.getElementById("section-resolution");
-  if (resSection) resSection.style.display = (isVideo || isFlux2) ? "none" : "";
+  if (resSection) resSection.style.display = (isVideo || isFlux2 || isDiff) ? "none" : "";
 
   const negSection = document.getElementById("section-negative");
   if (negSection) negSection.style.display = (isVideo || isFlux2) ? "none" : "";
 
-  const advVideoFields = document.getElementById("adv-video-fields");
-  if (advVideoFields) advVideoFields.style.display = isVideo ? "" : "none";
-
   document.querySelectorAll(".adv-image-only").forEach(el => {
     el.style.display = isVideo ? "none" : "";
+  });
+  document.querySelectorAll(".adv-video-only").forEach(el => {
+    el.style.display = isVideo ? "" : "none";
+  });
+  document.querySelectorAll(".adv-diff-only").forEach(el => {
+    el.style.display = isDiff ? "" : "none";
   });
 
   if (isVideo) updateVideoCost();
@@ -211,10 +218,6 @@ function updateGenerateButton() {
 }
 
 // ---- Thumbnail helpers ----
-const THUMB_EXTS = [".png", ".jpg", ".jpeg", ".webp"];
-function thumbnailUrl(filename, ext = ".png") {
-  return `/thumbnails/${encodeURIComponent(filename)}${ext}`;
-}
 function loraDisplayName(filename) {
   return filename.replace(/\.(safetensors|ckpt|pt|pth)$/i, "").replace(/[-_]/g, " ");
 }
@@ -225,9 +228,10 @@ const PLACEHOLDER_SVG = "data:image/svg+xml," + encodeURIComponent(
 async function renderLoraGallery(data) {
   const container = $("#lora-gallery");
   try {
-    if (!data) data = await API.getLoraList();
+    if (!data) data = await API.getLoraList(currentWorkflow());
     const available = data.available;
     const active = data.active || {};
+    const thumbUrls = data.thumb_urls || {};
     if (!available || Object.keys(available).length === 0) {
       container.innerHTML = `<span style="color:#666;font-size:12px">${t("loraNoFiles")}</span>`;
       return;
@@ -240,9 +244,10 @@ async function renderLoraGallery(data) {
         const isActive = filename in active;
         const weight = isActive ? active[filename] : parseFloat($("#txt-lora-defweight").value) || 0.8;
         const cls = isActive ? " active" : "";
+        const thumbSrc = thumbUrls[filename] || PLACEHOLDER_SVG;
       html += `
           <div class="lora-card${cls}" data-filename="${escAttr(filename)}">
-            <img src="${thumbnailUrl(filename)}" loading="lazy" data-thumb-base="${escAttr(filename)}" data-thumb-idx="0">
+            <img src="${thumbSrc}" loading="lazy">
             <div class="lora-name" title="${escAttr(filename)}">${escHtml(loraDisplayName(filename))}</div>
             <div class="lora-row">
               <input type="checkbox" ${isActive ? "checked" : ""}>
@@ -262,15 +267,10 @@ async function renderLoraGallery(data) {
       const valSpan = card.querySelector(".lora-val");
 
       img.addEventListener("error", () => {
-        let idx = parseInt(img.dataset.thumbIdx) || 0;
-        idx++;
-        if (idx < THUMB_EXTS.length) {
-          img.dataset.thumbIdx = idx;
-          img.src = thumbnailUrl(img.dataset.thumbBase, THUMB_EXTS[idx]);
-        } else {
-          img.src = PLACEHOLDER_SVG;
-          img.onerror = null;
-        }
+        // Defensive only: the backend reports the real file, so a failure here
+        // means it disappeared between scan and request.
+        img.src = PLACEHOLDER_SVG;
+        img.onerror = null;
       });
 
       function updateVal() { valSpan.textContent = parseFloat(range.value).toFixed(2); }
@@ -278,12 +278,12 @@ async function renderLoraGallery(data) {
       range.addEventListener("change", async () => {
         updateVal();
         const w = parseFloat(range.value);
-        if (cb.checked) { await API.addLora(filename, w); card.classList.add("active"); }
+        if (cb.checked) { await API.addLora(filename, w, currentWorkflow()); card.classList.add("active"); }
       });
       cb.addEventListener("change", async () => {
         const w = parseFloat(range.value);
         if (cb.checked) {
-          await API.addLora(filename, w);
+          await API.addLora(filename, w, currentWorkflow());
           card.classList.add("active");
         } else {
           await API.removeLora(filename);
@@ -370,7 +370,19 @@ function setupEvents() {
     updateLangagedUI();
   });
 
+  const dsRange = document.getElementById("rng-diff-strength");
+  const dsVal = document.getElementById("diff-strength-val");
+  if (dsRange && dsVal) {
+    dsRange.addEventListener("input", () => {
+      dsVal.textContent = parseFloat(dsRange.value).toFixed(2);
+    });
+  }
+
   $("#btn-open-lora").addEventListener("click", () => {
+    $("#lora-modal").style.display = "flex";
+    loadLoraList();
+  });
+  $("#btn-open-video-lora").addEventListener("click", () => {
     $("#lora-modal").style.display = "flex";
     loadLoraList();
   });
@@ -413,6 +425,7 @@ function setupEvents() {
   setupVideoUpload("video-last-drop", "video-last-input", "video-last-preview", "video-last-placeholder", false);
   setupFlux2Upload("flux2-source-drop", "flux2-source-input", "flux2-source-preview", "flux2-source-placeholder", true);
   setupFlux2Upload("flux2-ref-drop", "flux2-ref-input", "flux2-ref-preview", "flux2-ref-placeholder", false);
+  setupDiffUpload("diff-source-drop", "diff-source-input", "diff-source-preview", "diff-source-placeholder");
 
   const fp = document.getElementById("txt-flux2-prompt");
   if (fp) {
@@ -434,27 +447,6 @@ function setupEvents() {
 
   const durSel = document.getElementById("sel-video-duration");
   if (durSel) durSel.addEventListener("change", updateVideoCost);
-
-  const loraChk = document.getElementById("chk-video-lora");
-  if (loraChk) {
-    loraChk.addEventListener("change", () => {
-      const row = document.getElementById("video-lora-strength-row");
-      if (row) row.style.opacity = loraChk.checked ? "1" : "0.4";
-      row.style.pointerEvents = loraChk.checked ? "auto" : "none";
-    });
-  }
-  const rngVLora = document.getElementById("rng-video-lora");
-  const numVLora = document.getElementById("num-video-lora");
-  if (rngVLora && numVLora) {
-    rngVLora.addEventListener("input", () => { numVLora.value = parseFloat(rngVLora.value).toFixed(2); });
-    numVLora.addEventListener("change", () => {
-      let v = parseFloat(numVLora.value);
-      if (isNaN(v)) v = 0.7;
-      v = Math.min(1, Math.max(0, v));
-      rngVLora.value = v;
-      numVLora.value = v.toFixed(2);
-    });
-  }
 }
 
 async function saveMultidrawParts() {
@@ -566,11 +558,44 @@ function setupFlux2Upload(zoneId, inputId, previewId, placeholderId, isSource) {
   }
 }
 
+function setupDiffUpload(zoneId, inputId, previewId, placeholderId) {
+  const zone = document.getElementById(zoneId);
+  const input = document.getElementById(inputId);
+  const preview = document.getElementById(previewId);
+  const placeholder = document.getElementById(placeholderId);
+  if (!zone) return;
+
+  zone.addEventListener("click", () => input.click());
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("drag-over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("drag-over");
+    if (e.dataTransfer.files.length > 0) handleDiffImage(e.dataTransfer.files[0]);
+  });
+  input.addEventListener("change", () => {
+    if (input.files.length > 0) handleDiffImage(input.files[0]);
+  });
+
+  async function handleDiffImage(file) {
+    try {
+      const b64 = await fileToBase64(file);
+      g_diffSourceImage = b64;
+      preview.src = URL.createObjectURL(file);
+      preview.style.display = "block";
+      placeholder.style.display = "none";
+    } catch (e) {
+      console.error("Diff image load failed:", e);
+    }
+  }
+}
+
 function updateVideoCost() {
   const quality = g_videoQuality;
   const duration = parseInt(document.getElementById("sel-video-duration")?.value || "5");
-  const base = quality === "480p" ? 250 : 500;
-  const cost = Math.round(base * duration * 0.2);
+  let rate = quality === "480p" ? 50 : 200;
+  if (duration > 10) rate *= 2;
+  const cost = rate * duration;
   const el = document.getElementById("video-cost-display");
   if (el) el.textContent = t("cost") + ": " + cost;
 }
@@ -628,13 +653,9 @@ async function generate() {
         return;
       }
       const duration = parseInt($("#sel-video-duration").value);
-      const loraEnabled = $("#chk-video-lora").checked;
-      const loraStrength = parseFloat($("#num-video-lora").value);
-      const videoNeg = $("#txt-video-negative").value.trim() || null;
       result = await API.videoAsync(
         prompt, g_videoFirstImage, g_videoLastImage,
-        g_videoQuality, duration, g_videoOrientation,
-        loraEnabled, loraStrength, videoNeg, adv
+        g_videoQuality, duration, g_videoOrientation, adv
       );
     } else if (isFlux2) {
       const prompt = $("#txt-flux2-prompt").value.trim();
@@ -670,11 +691,23 @@ async function generate() {
       if (!prompt) {
         setStatus(t("promptRequired"));
         btn.disabled = false;
-        btn.textContent = t("generate");
+        btn.textContent = getGenerateButtonText();
         return;
       }
       if (g_hdMode) adv.hd_mode = true;
-      result = await API.drawAsync(prompt, adv);
+      if (wf === "discord_差分") {
+        if (!g_diffSourceImage) {
+          setStatus(t("diffSourceRequired"), "failed");
+          btn.disabled = false;
+          btn.textContent = t("diffGenerate");
+          return;
+        }
+        const denoise = parseFloat($("#rng-diff-strength").value);
+        if (!Number.isNaN(denoise)) adv.denoise = denoise;
+        result = await API.diffDrawAsync(prompt, g_diffSourceImage, adv);
+      } else {
+        result = await API.drawAsync(prompt, adv);
+      }
     }
 
     btn.textContent = t("generating");
@@ -704,16 +737,30 @@ function startPolling(taskId, isMulti) {
         clearInterval(pollingTimers[taskId]);
         delete pollingTimers[taskId];
         g_activeTask = null;
+        let downloadError = null;
         if (task.output_type === "video") {
-          const blob = await API.getTaskVideo(taskId);
-          showVideo(URL.createObjectURL(blob));
+          try {
+            const blob = await API.getTaskVideo(taskId);
+            showVideo(URL.createObjectURL(blob));
+          } catch (e) {
+            downloadError = e;
+            console.error("Video download failed:", e);
+          }
         } else {
-          const blob = await API.getTaskImage(taskId);
-          showImage(URL.createObjectURL(blob));
+          try {
+            const blob = await API.getTaskImage(taskId);
+            showImage(URL.createObjectURL(blob));
+          } catch (e) {
+            downloadError = e;
+            console.error("Image download failed:", e);
+          }
         }
         $("#btn-generate").disabled = false;
         $("#btn-generate").textContent = getGenerateButtonText();
-        setStatus(t("completed"), "completed");
+        setStatus(
+          downloadError ? `${t("completed")} - ${downloadError.message || t("error")}` : t("completed"),
+          downloadError ? "failed" : "completed"
+        );
         await loadQuota();
         addTaskToHistory(task);
       } else if (task.status === "failed") {
@@ -870,5 +917,6 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#sel-lang").value = currentLang;
   $("#sel-lang").addEventListener("change", () => setLang($("#sel-lang").value));
   setupEvents();
+  switchWorkflowUI();
   init();
 });

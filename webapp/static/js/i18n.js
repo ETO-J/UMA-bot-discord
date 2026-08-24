@@ -35,6 +35,13 @@ const I18N = {
     multidrawGenerate: "多角色生成",
     workflow: "工作流",
     workflowAnimaV2: "Anima V2 (画师融合)",
+    workflowDiff: "Anima 差分 (图生图)",
+    diffGenerate: "差分生成",
+    diffSourceImage: "底图（必须）",
+    diffSourceDropHint: "点击或拖拽上传底图",
+    diffSourceRequired: "请先上传底图",
+    diffStrength: "差分强度",
+    diffStrengthHint: "数值越大，图像与原图差异越大",
     workflowMultidraw: "多角色合成 (Multidraw)",
     history: "生成历史",
     historyRefresh: "刷新",
@@ -71,7 +78,7 @@ const I18N = {
     loginRequired: "🔐 请先点击右上角 Discord 登录按钮进行登录",
     quotaExhausted: "🔒 今日免费配额已用完，请联系网站创建者获取更多免费额度",
     taskNotFound: "任务不存在（可能因服务重启已清除）",
-    workflowVideo: "视频生成 (Wan2.2)",
+    workflowVideo: "视频生成 (MiniMax H3)",
     videoFirstFrame: "首帧图像",
     videoLastFrame: "尾帧图像（可选）",
     videoDropHint: "点击或拖拽上传首帧",
@@ -79,8 +86,7 @@ const I18N = {
     videoQuality: "画质",
     videoDuration: "时长",
     videoGenerate: "生成视频",
-    videoEnhance: "动态增强",
-    videoEnhanceStrength: "强度",
+    videoLoraManage: "视频 LoRA ▸",
     videoNegPlaceholder: "留空使用工作流默认",
     firstFrameRequired: "请先上传首帧图像",
     cost: "消耗",
@@ -94,6 +100,16 @@ const I18N = {
     flux2RefImage: "参考图（可选）",
     flux2RefDropHint: "点击或拖拽上传参考图（可选）",
     flux2SourceRequired: "请先上传原图",
+    chatTitle: "AI 绘画助手",
+    chatWelcome: "你好！我是绘画助手，可以帮你将想法转化为精准的英文绘图提示词。试着告诉我你想画什么吧~",
+    chatPlaceholder: "描述你的绘图想法...",
+    chatSend: "发送",
+    chatClear: "清除对话",
+    chatApply: "应用到表单",
+    chatThinking: "思考中",
+    chatError: "请求失败",
+    chatBubbleTitle: "AI 绘画助手",
+    chatBubbleLabel: "AI助手",
   },
 
   en: {
@@ -132,6 +148,13 @@ const I18N = {
     multidrawGenerate: "Multidraw",
     workflow: "Workflow",
     workflowAnimaV2: "Anima V2 (Artist Fusion)",
+    workflowDiff: "Anima Diff (Image-to-Image)",
+    diffGenerate: "Diff Generate",
+    diffSourceImage: "Base Image (required)",
+    diffSourceDropHint: "Click or drag to upload base image",
+    diffSourceRequired: "Please upload a base image first",
+    diffStrength: "Diff Strength",
+    diffStrengthHint: "Higher = more deviation from the original image",
     workflowMultidraw: "Multidraw (Multi-Char)",
     history: "History",
     historyRefresh: "Refresh",
@@ -168,7 +191,7 @@ const I18N = {
     loginRequired: "🔐 Please click the Discord login button at the top right first",
     quotaExhausted: "🔒 Daily free quota exhausted. Please contact the website creator for more free quota.",
     taskNotFound: "Task not found (likely cleared by server restart)",
-    workflowVideo: "Video Generation (Wan2.2)",
+    workflowVideo: "Video Generation (MiniMax H3)",
     videoFirstFrame: "First Frame",
     videoLastFrame: "Last Frame (optional)",
     videoDropHint: "Click or drag to upload first frame",
@@ -176,8 +199,7 @@ const I18N = {
     videoQuality: "Quality",
     videoDuration: "Duration",
     videoGenerate: "Generate Video",
-    videoEnhance: "Dynamic Enhancement",
-    videoEnhanceStrength: "Strength",
+    videoLoraManage: "Video LoRA ▸",
     videoNegPlaceholder: "Leave empty for workflow default",
     firstFrameRequired: "Please upload a first frame image",
     cost: "Cost",
@@ -191,6 +213,16 @@ const I18N = {
     flux2RefImage: "Reference Image (optional)",
     flux2RefDropHint: "Click or drag to upload reference image (optional)",
     flux2SourceRequired: "Please upload a source image first",
+    chatTitle: "AI Drawing Assistant",
+    chatWelcome: "Hi! I'm your drawing assistant. I can help you turn ideas into precise English drawing prompts. Tell me what you want to draw~",
+    chatPlaceholder: "Describe your drawing idea...",
+    chatSend: "Send",
+    chatClear: "Clear Chat",
+    chatApply: "Apply to Form",
+    chatThinking: "Thinking",
+    chatError: "Request failed",
+    chatBubbleTitle: "AI Drawing Assistant",
+    chatBubbleLabel: "AI Assistant",
   },
 
   ja: {
@@ -229,6 +261,13 @@ const I18N = {
     multidrawGenerate: "マルチキャラ生成",
     workflow: "ワークフロー",
     workflowAnimaV2: "Anima V2 (画師融合)",
+    workflowDiff: "Anima 差分 (図生図)",
+    diffGenerate: "差分生成",
+    diffSourceImage: "元画像（必須）",
+    diffSourceDropHint: "クリックまたはドラッグで元画像をアップロード",
+    diffSourceRequired: "元画像を先にアップロードしてください",
+    diffStrength: "差分強度",
+    diffStrengthHint: "数値が大きいほど元画像との差異が大きくなります",
     workflowMultidraw: "マルチキャラ合成",
     history: "履歴",
     historyRefresh: "更新",
@@ -265,7 +304,7 @@ const I18N = {
     loginRequired: "🔐 右上のDiscordログインボタンを先にクリックしてください",
     quotaExhausted: "🔒 本日の無料クォータを使い切りました。サイト作成者にお問い合わせください。",
     taskNotFound: "タスクが見つかりません（サーバー再起動で削除された可能性）",
-    workflowVideo: "動画生成 (Wan2.2)",
+    workflowVideo: "動画生成 (MiniMax H3)",
     videoFirstFrame: "先頭フレーム",
     videoLastFrame: "末尾フレーム（任意）",
     videoDropHint: "クリックまたはドラッグで先頭フレームをアップロード",
@@ -273,8 +312,7 @@ const I18N = {
     videoQuality: "画質",
     videoDuration: "長さ",
     videoGenerate: "動画を生成",
-    videoEnhance: "動的エンハンス",
-    videoEnhanceStrength: "強度",
+    videoLoraManage: "動画 LoRA ▸",
     videoNegPlaceholder: "空欄でワークフロー既定値",
     firstFrameRequired: "先頭フレーム画像をアップロードしてください",
     cost: "消費",
@@ -288,6 +326,16 @@ const I18N = {
     flux2RefImage: "参照画像（任意）",
     flux2RefDropHint: "クリックまたはドラッグで参照画像をアップロード（任意）",
     flux2SourceRequired: "元画像を先にアップロードしてください",
+    chatTitle: "AI作画アシスタント",
+    chatWelcome: "こんにちは！作画アシスタントです。アイデアを正確な英語プロンプトに変換するお手伝いをします。何を描きたいか教えてください~",
+    chatPlaceholder: "作画のアイデアを説明...",
+    chatSend: "送信",
+    chatClear: "会話をクリア",
+    chatApply: "フォームに適用",
+    chatThinking: "考え中",
+    chatError: "リクエスト失敗",
+    chatBubbleTitle: "AI作画アシスタント",
+    chatBubbleLabel: "AIアシスタント",
   }
 };
 
@@ -346,10 +394,11 @@ function updateLangagedUI() {
 
   const wfEl = document.getElementById("sel-workflow");
   if (wfEl) {
-    const isMulti = wfEl.value === "multidraw";
     const genBtn = document.getElementById("btn-generate");
     if (genBtn && !genBtn.disabled) {
-      genBtn.textContent = isMulti ? t("multidrawGenerate") : t("generate");
+      if (typeof getGenerateButtonText === "function") {
+        genBtn.textContent = getGenerateButtonText();
+      }
     }
   }
 

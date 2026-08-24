@@ -17,6 +17,17 @@ COMFYUI_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 LORA_BASE_PATH = Path(os.getenv("LORA_BASE_PATH", r"C:\Users\Administrator\Documents\ComfyUI\models\loras"))
 LORA_DIRS = ["char", "pose", "style"]
 LORA_ANIMA_DIRS = ["char_anima", "pose_anima", "style_anima"]
+LORA_VIDEO_DIRS = ["gif"]
+# Workflows that run on the Anima model family should load anima LoRAs.
+# Kept as an explicit set because the diff workflow name ("discord_差分") does
+# not contain the literal "anima" substring.
+ANIMA_WORKFLOWS = {
+    "discord_anima",
+    "discord_anima_v2",
+    "discord_anima_new",
+    "discord_anima_高清",
+    "discord_差分",
+}
 
 IMAGE_SAVE_PATH = Path(os.getenv("IMAGE_SAVE_PATH", r"D:\civitai\线上绘图"))
 IMAGE_SAVE_PATH.mkdir(parents=True, exist_ok=True)
@@ -29,10 +40,29 @@ WORKFLOW_DIR = COMFYUI_DIR
 
 VIDEO_RESOLUTIONS = {
     "480p": {"portrait": (480, 640), "square": (512, 512), "landscape": (640, 480)},
-    "720p": {"portrait": (720, 1280), "square": (768, 768), "landscape": (1280, 720)},
+    # MiniMax H3's video latent is width/16 x height/16, and patchify_video
+    # needs both to be even, so every dimension must be a multiple of 32.
+    # True 720 (720//16 = 45, odd) makes patchify throw, so use a 1280x736
+    # canvas instead (both are multiples of 32; latent 80x46 is even).
+    "720p": {"portrait": (736, 1280), "square": (736, 736), "landscape": (1280, 736)},
 }
-VIDEO_BASE_COST = {"480p": 250, "720p": 500}
-VIDEO_FPS = 16
+# Per-second quota for 1-10s video.  720p is 4x the 480p rate; durations
+# 11-15s double the per-second rate (e.g. 480p 11-15s = 100/s, 720p =
+# 200/s, 720p 11-15s = 400/s).
+VIDEO_PER_SECOND_COST = {"480p": 50, "720p": 200}
+VIDEO_LONG_DURATION_START = 11
+VIDEO_LONG_DURATION_MULT = 2
+VIDEO_FPS = 24
+
+# === AI 绘画助手 ===
+AISSETTING_DIR = DATA_DIR / "aisetting"
+ARTIST_SKILLS_DIR = AISSETTING_DIR / "skills"
+ARTIST_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+DEEPSEEK_CHAT_MODEL = "deepseek-v4-flash"
+CHAT_MAX_ROUNDS = 20
+CHAT_MAX_TOKENS = 4096
+CHAT_TEMPERATURE = 1.0
+ARTIST_CHAT_COST = 10000
 
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
@@ -103,23 +133,52 @@ WORKFLOW_CONFIGS = {
         "hd_cfg": 5.0,
         "hd_denoise": 0.75,
     },
+    "discord_差分": {
+        "model_source": ["64", 0],
+        "clip_source": ["66", 0],
+        "pos_node_id": None,
+        "neg_node_id": "68",
+        "supports_lora": True,
+        "lora_start_id": 1000,
+        "lora_type": "LoraLoaderModelOnly",
+        "bridging_model_node": "73",
+        "bridging_positive_node": "73",
+        "prompt_pack_node": "72",
+        "prompt_field": "base_prompt",
+        "prompt_class_type": "AnimaArtistPack",
+        "hd_enabled": True,
+        "hd_start_id": 2000,
+        "hd_scale": 1.5,
+        "hd_upscale_method": "nearest-exact",
+        "hd_steps": 15,
+        "hd_cfg": 5.0,
+        "hd_denoise": 0.75,
+        # img2img (diff) nodes: uploaded image is loaded here and VAE-encoded
+        # into the same latent the KSampler consumes.
+        "load_image_node_id": "78",
+        "vae_encode_node_id": "79",
+        "is_anima": True,
+    },
     "webui_video": {
-        "clip_source": ["84", 0],
-        "pos_node_id": "93",
-        "neg_node_id": "89",
-        "supports_lora": False,
-        "video_node_id": "134",
-        "start_image_node_id": "97",
-        "end_image_node_id": "135",
-        "lora_high_node_id": "101",
-        "lora_low_node_id": "102",
-        "high_chain_source": ["117", 0],
-        "low_chain_source": ["118", 0],
-        "high_chain_target": "104",
-        "low_chain_target": "103",
-        "ksampler_ids": ["86", "85"],
-        "video_node_class_first": "WanImageToVideo",
-        "video_node_class_both": "WanFirstLastFrameToVideo",
+        "supports_lora": True,
+        "workflow_file": "webui-minimaxh3-fl2va",
+        "video_node_id": "132",
+        "start_image_node_id": "114",
+        "end_image_node_id": "140",
+        "seed_node_id": "130",
+        "prompt_field": "prompt",
+        "lora_start_id": 4000,
+        "lora_type": "LoraLoader",
+        # Fixed pipeline LoRA (16-step CFG-distill), always applied; it is
+        # excluded from the user-selectable list but stays as the chain tail.
+        "base_lora_node_id": "139",
+        "fixed_lora_names": [
+            "lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16_.safetensors"
+        ],
+        # Injection anchors: user LoRAs are chained between these sources and
+        # the fixed base LoRA (node 139).
+        "model_source": ["137", 0],
+        "clip_source": ["129", 0],
     },
     "discord_flux2_9b_edit": {
         "supports_lora": False,

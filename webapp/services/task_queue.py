@@ -80,6 +80,14 @@ class TaskQueue:
                     output_type TEXT DEFAULT 'image'
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS generated_files (
+                    filename TEXT NOT NULL,
+                    subfolder TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (filename, subfolder)
+                )
+            """)
             cursor.execute("PRAGMA table_info(tasks)")
             existing_cols = [col[1] for col in cursor.fetchall()]
             if "output_type" not in existing_cols:
@@ -88,6 +96,39 @@ class TaskQueue:
                 "CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, created_at DESC)"
             )
             self._conn.commit()
+
+    def register_generated_file(self, filename: str, subfolder: str = "") -> None:
+        """Record an output file that the webapp/bot actually generated.
+
+        The sweep only moves files present in this registry, so videos or
+        images produced by manually run local ComfyUI workflows are never
+        touched even when they share the same filename prefix.
+        """
+        with self._db_lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "INSERT OR IGNORE INTO generated_files (filename, subfolder, created_at) "
+                "VALUES (?, ?, ?)",
+                (filename, subfolder or "", time.time()),
+            )
+            self._conn.commit()
+
+    def unregister_generated_file(self, filename: str, subfolder: str = "") -> None:
+        """Drop the registry entry once the file has been archived."""
+        with self._db_lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "DELETE FROM generated_files WHERE filename=? AND subfolder=?",
+                (filename, subfolder or ""),
+            )
+            self._conn.commit()
+
+    def get_generated_files(self) -> list[tuple[str, str]]:
+        """Return all registered (filename, subfolder) pairs."""
+        with self._db_lock:
+            cursor = self._conn.cursor()
+            cursor.execute("SELECT filename, subfolder FROM generated_files")
+            return [(row[0], row[1]) for row in cursor.fetchall()]
 
     @staticmethod
     def _row_to_task(row) -> Task:
@@ -133,32 +174,60 @@ class TaskQueue:
             cursor.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
             self._conn.commit()
 
-    def _save_image_to_disk(self, task: Task):
+    @staticmethod
+    def _file_ext(task: Task | None) -> str:
+        if task is not None and task.output_type == "video":
+            return ".mp4"
+        return ".png"
+
+    def _saved_path(self, task_id: str, ext: str) -> Path:
+        return TASK_IMAGE_DIR / f"{task_id}{ext}"
+
+    async def _save_image_to_disk(self, task: Task) -> None:
+        """Persist the result bytes off the event loop thread."""
         if not task.image_bytes:
             return
-        path = TASK_IMAGE_DIR / f"{task.task_id}.png"
+        path = self._saved_path(task.task_id, self._file_ext(task))
         try:
-            path.write_bytes(task.image_bytes)
-            task.image_filename = path.name
+            await asyncio.to_thread(path.write_bytes, task.image_bytes)
         except Exception as e:
             logger.error("Failed to persist task image %s: %s", task.task_id, e)
 
-    def _read_image_from_disk(self, task_id: str) -> bytes | None:
-        path = TASK_IMAGE_DIR / f"{task_id}.png"
+    async def _read_image_from_disk(self, task_id: str, ext: str = ".png") -> bytes | None:
+        path = self._saved_path(task_id, ext)
         if path.exists():
             try:
-                return path.read_bytes()
+                return await asyncio.to_thread(path.read_bytes)
             except Exception as e:
                 logger.error("Failed to read task image %s: %s", task_id, e)
         return None
 
-    def _delete_image_from_disk(self, task_id: str):
-        path = TASK_IMAGE_DIR / f"{task_id}.png"
+    async def _delete_image_from_disk(self, task_id: str, ext: str = ".png") -> None:
+        path = self._saved_path(task_id, ext)
         if path.exists():
             try:
-                path.unlink()
+                await asyncio.to_thread(path.unlink)
             except Exception as e:
                 logger.warning("Failed to delete task image %s: %s", task_id, e)
+
+    async def get_saved_file_path(self, task_id: str) -> Path | None:
+        """Return the on-disk file path for a completed task, or None."""
+        ext = ".png"
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if task:
+                if task.status != "completed":
+                    return None
+                ext = self._file_ext(task)
+                if task.image_filename:
+                    p = TaskQueue._saved_path_static(task_id, task.image_filename)
+                    return p if p.exists() else None
+        p = self._saved_path(task_id, ext)
+        return p if p.exists() else None
+
+    @staticmethod
+    def _saved_path_static(task_id: str, filename: str) -> Path:
+        return TASK_IMAGE_DIR / filename
 
     async def load_persisted_tasks(self):
         """Load tasks from DB on startup. Mark incomplete tasks as failed."""
@@ -237,6 +306,8 @@ class TaskQueue:
         return task
 
     async def update_task(self, task_id: str, **kwargs):
+        save_path = None
+        save_bytes = None
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -255,10 +326,18 @@ class TaskQueue:
             if new_status in ("completed", "failed") and task.comfyui_prompt_id:
                 self._comfyui_run_started.pop(task.comfyui_prompt_id, None)
             if new_status == "completed" and task.image_bytes:
-                self._save_image_to_disk(task)
+                save_path = self._saved_path(task.task_id, self._file_ext(task))
+                save_bytes = task.image_bytes
+                task.image_filename = save_path.name
             self._persist_task(task)
+        if save_path is not None and save_bytes is not None:
+            try:
+                await asyncio.to_thread(save_path.write_bytes, save_bytes)
+            except Exception as e:
+                logger.error("Failed to persist task image %s: %s", task_id, e)
 
     async def get_image_bytes(self, task_id: str) -> bytes | None:
+        ext = ".png"
         async with self._lock:
             task = self._tasks.get(task_id)
             if task:
@@ -266,22 +345,21 @@ class TaskQueue:
                     return None
                 if task.image_bytes:
                     return task.image_bytes
-        return self._read_image_from_disk(task_id)
+                ext = self._file_ext(task)
+        return await self._read_image_from_disk(task_id, ext)
 
     async def cleanup(self):
         now = time.time()
         to_remove = []
         async with self._lock:
-            to_remove = [
-                tid
-                for tid, t in self._tasks.items()
-                if t.status in ("completed", "failed") and (now - t.created_at) > self.cleanup_age
-            ]
-            for tid in to_remove:
+            for tid, t in self._tasks.items():
+                if t.status in ("completed", "failed") and (now - t.created_at) > self.cleanup_age:
+                    to_remove.append((tid, self._file_ext(t)))
+            for tid, _ in to_remove:
                 del self._tasks[tid]
-        for tid in to_remove:
+        for tid, ext in to_remove:
             self._delete_from_db(tid)
-            self._delete_image_from_disk(tid)
+            await self._delete_image_from_disk(tid, ext)
         if to_remove:
             logger.info("Cleaned up %d old tasks", len(to_remove))
 

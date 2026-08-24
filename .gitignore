@@ -157,6 +157,7 @@ nonebot_local/
 # Data directories (runtime / generated)
 data/*.db
 data/*.db-journal
+data/comfyui_*.json
 data/knowledge_db/*.faiss
 data/knowledge_db/*.pkl
 data/knowledge_db/.version

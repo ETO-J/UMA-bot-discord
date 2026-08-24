@@ -5,9 +5,21 @@ const API = {
     const url = this.base + path;
     const res = await fetch(url, options);
     if (!res.ok) {
-      const text = await res.text();
-      let msg = text;
-      try { msg = JSON.parse(text).detail || text; } catch {}
+      let msg = `HTTP ${res.status}`;
+      try {
+        const text = await res.text();
+        const trimmed = text.trim();
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+          const parsed = JSON.parse(trimmed);
+          msg = parsed.detail || msg;
+        } else if (res.status === 524) {
+          msg = "Request timed out (524)";
+        } else {
+          // Non-JSON pages (e.g. Cloudflare 5xx HTML) -> keep it short, don't
+          // dump the whole error page into the status area.
+          msg = trimmed.slice(0, 120) || msg;
+        }
+      } catch (e) { /* keep the default message */ }
       const err = new Error(msg);
       err.status = res.status;
       throw err;
@@ -38,6 +50,18 @@ const API = {
     });
   },
 
+  async diffDrawAsync(prompt, image, advanced = {}) {
+    const body = { prompt, image, ...advanced };
+    Object.keys(body).forEach(k => {
+      if (body[k] === "" || body[k] === null || body[k] === undefined) delete body[k];
+    });
+    return this._json("/draw/diff/async", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+
   async setHdMode(enabled) {
     return this._json("/settings/hd_mode", {
       method: "PUT",
@@ -58,7 +82,7 @@ const API = {
     });
   },
 
-  async videoAsync(prompt, startImage, endImage, quality, duration, orientation, loraEnabled, loraStrength, negativePrompt, advanced = {}) {
+  async videoAsync(prompt, startImage, endImage, quality, duration, orientation, advanced = {}) {
     const body = {
       prompt,
       start_image: startImage,
@@ -66,9 +90,6 @@ const API = {
       quality,
       duration,
       orientation,
-      lora_enabled: loraEnabled,
-      lora_strength: loraStrength,
-      negative_prompt: negativePrompt || null,
       ...advanced,
     };
     Object.keys(body).forEach(k => {
@@ -161,15 +182,16 @@ const API = {
   },
 
   // Lora
-  async getLoraList() {
-    return this._json("/lora");
+  async getLoraList(workflow) {
+    const q = workflow ? "?workflow=" + encodeURIComponent(workflow) : "";
+    return this._json("/lora" + q);
   },
 
-  async addLora(name, weight) {
+  async addLora(name, weight, workflow) {
     return this._json("/lora/add", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, weight }),
+      body: JSON.stringify({ name, weight, workflow: workflow || null }),
     });
   },
 

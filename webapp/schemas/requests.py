@@ -11,6 +11,18 @@ class DrawRequest(BaseModel):
     hd_mode: bool = False
 
 
+class DiffDrawRequest(BaseModel):
+    prompt: str
+    image: str  # base64-encoded source image (required for img2img / diff)
+    denoise: float | None = Field(default=None, ge=0.0, le=1.0)
+    seed: int | None = None
+    sampler_name: str | None = None
+    scheduler: str | None = None
+    steps: int | None = None
+    cfg: float | None = None
+    hd_mode: bool = False
+
+
 class MultidrawRequest(BaseModel):
     prompt1: str
     prompt2: str
@@ -27,12 +39,9 @@ class VideoRequest(BaseModel):
     start_image: str
     end_image: str | None = None
     quality: str = "480p"
-    duration: int = Field(default=5, ge=1, le=6)
+    duration: int = Field(default=5, ge=1, le=15)
     orientation: str = "portrait"
-    lora_enabled: bool = True
-    lora_strength: float = Field(default=0.7, ge=0.0, le=1.0)
     seed: int | None = None
-    negative_prompt: str | None = None
 
 
 class ResolutionRequest(BaseModel):
@@ -70,9 +79,26 @@ class Flux2EditRequest(BaseModel):
     sampler_name: str | None = None
 
 
+class ChatSendRequest(BaseModel):
+    message: str
+
+
+class ChatResponse(BaseModel):
+    content: str
+    prompt: str | None = None
+    negative: str | None = None
+
+
+class ChatHistoryItem(BaseModel):
+    role: str
+    content: str
+    timestamp: float
+
+
 class LoraAddRequest(BaseModel):
     name: str
     weight: float = Field(default=0.8, ge=0.0, le=2.0)
+    workflow: str | None = None
 
 
 class LoraRemoveRequest(BaseModel):
@@ -123,3 +149,4 @@ class LoraListResponse(BaseModel):
     available: dict[str, list[str]]
     active: dict[str, float]
     workflow_label: str
+    thumb_urls: dict[str, str | None] = {}

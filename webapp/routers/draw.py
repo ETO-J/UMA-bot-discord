@@ -1,20 +1,48 @@
 import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
 
-from schemas.requests import DrawRequest, MultidrawRequest, VideoRequest, Flux2EditRequest, TaskResponse
+from schemas.requests import DrawRequest, DiffDrawRequest, MultidrawRequest, VideoRequest, Flux2EditRequest, TaskResponse
 from services.workflow_manager import wm
 from services.generator import generate_image, generate_multidraw_image, generate_video, generate_flux2_edit_image
 from services.task_queue import task_queue
 from dependencies import get_current_user_id
-from config import VIDEO_RESOLUTIONS, VIDEO_BASE_COST, VIDEO_FPS
+from config import (
+    VIDEO_RESOLUTIONS,
+    VIDEO_PER_SECOND_COST,
+    VIDEO_LONG_DURATION_START,
+    VIDEO_LONG_DURATION_MULT,
+    VIDEO_FPS,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["draw"])
 
 DEFAULT_WORKFLOW = "discord_anima_v2"
+DIFF_WORKFLOW = "discord_差分"
 HD_COST = 10
+
+# Strong references for fire-and-forget generation tasks so the event loop never
+# garbage-collects (and silently cancels) a long-running video generation.
+_bg_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_bg(coro):
+    """Schedule a background task while keeping a strong reference."""
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+
+    def _done(t: asyncio.Task):
+        _bg_tasks.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            logger.error("Background generation task crashed: %s", exc)
+
+    task.add_done_callback(_done)
+    return task
 
 
 @router.post("/draw", response_class=Response)
@@ -84,7 +112,50 @@ async def draw_async(req: DrawRequest, user_id: str = Depends(get_current_user_i
             wm.refund_quota(user_id, cost)
             await task_queue.update_task(task.task_id, status="failed", error=str(e))
 
-    asyncio.create_task(process())
+    _spawn_bg(process())
+    return await _task_to_response_with_queue(task)
+
+
+@router.post("/draw/diff/async", response_model=TaskResponse)
+async def draw_diff_async(req: DiffDrawRequest, user_id: str = Depends(get_current_user_id)):
+    user_settings = wm.get_user_settings(user_id)
+    cost = HD_COST if req.hd_mode else 1
+    remaining = user_settings["limit_count"] - user_settings["used_today"]
+    if remaining < cost:
+        raise HTTPException(status_code=429, detail=f"Quota exhausted: need {cost}, have {remaining}")
+    if not wm.use_quota(user_id, cost):
+        raise HTTPException(status_code=429, detail="Quota check failed")
+
+    task = await task_queue.create_task(
+        user_id=user_id, prompt=req.prompt,
+        seed=req.seed, sampler_name=req.sampler_name,
+        scheduler=req.scheduler, steps=req.steps, cfg=req.cfg,
+    )
+
+    async def process():
+        await task_queue.update_task(task.task_id, status="processing")
+        async def _on_submit(pid: str):
+            await task_queue.update_task(task.task_id, comfyui_prompt_id=pid)
+        try:
+            result = await generate_image(
+                req.prompt, user_id, DIFF_WORKFLOW,
+                seed=req.seed, sampler_name=req.sampler_name,
+                scheduler=req.scheduler, steps=req.steps, cfg=req.cfg,
+                hd_mode=req.hd_mode,
+                denoise=req.denoise,
+                source_image_b64=req.image,
+                on_prompt_submitted=_on_submit,
+            )
+            if result:
+                await task_queue.update_task(task.task_id, status="completed", image_bytes=result)
+            else:
+                wm.refund_quota(user_id, cost)
+                await task_queue.update_task(task.task_id, status="failed", error="Diff generation returned no data")
+        except Exception as e:
+            wm.refund_quota(user_id, cost)
+            await task_queue.update_task(task.task_id, status="failed", error=str(e))
+
+    _spawn_bg(process())
     return await _task_to_response_with_queue(task)
 
 
@@ -151,12 +222,15 @@ async def multidraw_async(req: MultidrawRequest, user_id: str = Depends(get_curr
             wm.refund_quota(user_id, 10)
             await task_queue.update_task(task.task_id, status="failed", error=str(e))
 
-    asyncio.create_task(process())
+    _spawn_bg(process())
     return await _task_to_response_with_queue(task)
 
 
 def _video_cost(quality: str, duration: int) -> int:
-    return int(VIDEO_BASE_COST[quality] * duration * 0.2)
+    rate = VIDEO_PER_SECOND_COST.get(quality, VIDEO_PER_SECOND_COST["480p"])
+    if duration >= VIDEO_LONG_DURATION_START:
+        rate *= VIDEO_LONG_DURATION_MULT
+    return rate * duration
 
 
 @router.post("/video/async", response_model=TaskResponse)
@@ -188,10 +262,8 @@ async def video_async(req: VideoRequest, user_id: str = Depends(get_current_user
                 start_image_b64=req.start_image,
                 end_image_b64=req.end_image,
                 width=width, height=height, length=length,
-                lora_enabled=req.lora_enabled,
-                lora_strength=req.lora_strength,
+                user_id=user_id,
                 seed=req.seed,
-                negative_prompt=req.negative_prompt,
                 on_prompt_submitted=_on_submit,
             )
             if result:
@@ -203,7 +275,7 @@ async def video_async(req: VideoRequest, user_id: str = Depends(get_current_user
             wm.refund_quota(user_id, cost)
             await task_queue.update_task(task.task_id, status="failed", error=str(e))
 
-    asyncio.create_task(process())
+    _spawn_bg(process())
     return await _task_to_response_with_queue(task)
 
 
@@ -252,7 +324,7 @@ async def flux2_edit_async(req: Flux2EditRequest, user_id: str = Depends(get_cur
             wm.refund_quota(user_id, cost)
             await task_queue.update_task(task.task_id, status="failed", error=str(e))
 
-    asyncio.create_task(process())
+    _spawn_bg(process())
     return await _task_to_response_with_queue(task)
 
 
@@ -296,6 +368,9 @@ async def get_task_status(task_id: str):
 
 @router.get("/task/{task_id}/image")
 async def get_task_image(task_id: str):
+    path = await task_queue.get_saved_file_path(task_id)
+    if path is not None:
+        return FileResponse(path, media_type="image/png")
     image_bytes = await task_queue.get_image_bytes(task_id)
     if image_bytes is None:
         raise HTTPException(status_code=404, detail="Image not ready or task not found")
@@ -304,6 +379,9 @@ async def get_task_image(task_id: str):
 
 @router.get("/task/{task_id}/video")
 async def get_task_video(task_id: str):
+    path = await task_queue.get_saved_file_path(task_id)
+    if path is not None:
+        return FileResponse(path, media_type="video/mp4")
     video_bytes = await task_queue.get_image_bytes(task_id)
     if video_bytes is None:
         raise HTTPException(status_code=404, detail="Video not ready or task not found")
