@@ -825,12 +825,37 @@ button {
   background: #6c5ce7;
   color: #fff;
   border-bottom-right-radius: 4px;
+  position: relative;
+  padding-right: 26px;
 }
 .chat-msg.assistant {
   align-self: flex-start;
   background: var(--bg3);
   color: var(--fg);
   border-bottom-left-radius: 4px;
+}
+.chat-retry {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.chat-msg.user:hover .chat-retry,
+.chat-retry:hover {
+  opacity: 1;
+}
+.chat-retry:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.25);
 }
 
 .chat-msg.loading {
@@ -922,6 +947,74 @@ button {
 }
 .chat-send-btn:hover { background: #5a4bd6; }
 .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.chat-image-btn {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+.chat-image-btn:hover { border-color: #6c5ce7; color: #6c5ce7; }
+
+.chat-image-preview {
+  display: grid;
+  grid-template-columns: repeat(5, 64px);
+  gap: 8px;
+  padding: 10px 12px 0 12px;
+  flex-shrink: 0;
+}
+.chat-thumb {
+  position: relative;
+  width: 64px;
+  height: 64px;
+}
+.chat-thumb img {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+  display: block;
+}
+.chat-thumb-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+}
+.chat-thumb-remove:hover { background: #e74c3c; }
+
+.chat-msg img.chat-user-image {
+  max-width: 180px;
+  max-height: 180px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin: 4px 0;
+  display: block;
+}
+
+.chat-estimate {
+  padding: 6px 12px 0 12px;
+  font-size: 11px;
+  color: var(--fg2);
+  min-height: 14px;
+  flex-shrink: 0;
+}
 
 .chat-footer {
   display: flex;

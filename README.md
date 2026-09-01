@@ -8,6 +8,7 @@
 |------|------|
 | AI 对话 | 基于 DeepSeek / Ollama，带记忆系统 + FAISS 向量知识库 + 联网搜索 + 图片识别 |
 | AI 绘图 | 对接本地 ComfyUI，支持多种工作流、Lora 管理、高清修复、多角色合成 |
+| 历史抓取 | `抓取 图片/文本/全部 [频道ID]`，保存频道文本与原始附件到 `data/grabbing_data` |
 | 今日担当 | 每日随机赛马娘角色邂逅 |   #需自行在项目根目录下配置pixiv_images文件夹，下属不同角色的子文件夹以及图片。
 | 人设切换 | 多种 AI 角色人格切换 |
 | 内容审核 | 垃圾消息检测、用户黑名单、每日配额管理 |
@@ -21,7 +22,7 @@
 ├── bpdiscord/
 │   └── plugins/bpdiscord/    # 核心插件
 │       ├── ai/               #   AI 对话模块（含自动翻译）
-│       ├── features/         #   功能模块 (绘图、今日担当)
+│       ├── features/         #   功能模块 (绘图、今日担当、历史抓取)
 │       ├── admin/            #   管理员命令
 │       ├── config.py         #   统一配置
 │       └── help.py           #   帮助信息
@@ -35,12 +36,16 @@
 │   └── static/               #   前端静态资源
 ├── data/
 │   ├── aisetting/            # AI 人设文件
+│   ├── grabbing_data/        # 频道历史抓取结果（按频道号分目录：文本/图片/其他附件）
 │   └── knowledge_db/         # FAISS 知识库文本
 ├── docs/                     # 用户文档 (中/英/日)
 ├── knowledge_manager.py      # 知识库管理 GUI
 ├── pyproject.toml
 └── requirements.txt
 ```
+
+全频道抓取时，`data/grabbing_data/` 下会按频道号建立子目录，并在内部拆分为
+`text/`（可读文本）、`images/`（原图）和 `files/`（其他附件）。
 
 ## Web UI
 

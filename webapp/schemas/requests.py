@@ -81,6 +81,8 @@ class Flux2EditRequest(BaseModel):
 
 class ChatSendRequest(BaseModel):
     message: str
+    images: list[str] | None = None  # base64 data URLs of reference images
+    image_sizes: list[list[int]] | None = None  # [[w, h], ...] aligned with images
 
 
 class ChatResponse(BaseModel):
@@ -93,6 +95,24 @@ class ChatHistoryItem(BaseModel):
     role: str
     content: str
     timestamp: float
+    content_type: str = "text"
+    image: str | None = None  # data URL, only present for image messages
+    images: list[str] | None = None  # all image data URLs for a message
+
+
+class ChatEstimateRequest(BaseModel):
+    message: str
+    image_sizes: list[list[int]] | None = None
+
+
+class ChatEstimateResponse(BaseModel):
+    text_tokens: int
+    image_tokens: int
+    image_count: int = 0
+    total_tokens: int
+    cost: int
+    max_cost: int
+    remaining: int | None = None
 
 
 class LoraAddRequest(BaseModel):

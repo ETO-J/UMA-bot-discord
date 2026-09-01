@@ -7,10 +7,17 @@
   const sendBtn = document.getElementById("chat-send");
   const minimizeBtn = document.getElementById("chat-minimize");
   const clearBtn = document.getElementById("chat-clear");
+  const imageBtn = document.getElementById("chat-image-btn");
+  const fileInput = document.getElementById("chat-file");
+  const imagePreview = document.getElementById("chat-image-preview");
+  const estimateEl = document.getElementById("chat-estimate");
 
+  const MAX_IMAGES = 5;
   let isOpen = false;
   let isLoading = false;
   let historyLoaded = false;
+  let selectedImages = []; // [{dataUrl, width, height}] images to attach next send
+  let estimateTimer = null;
 
   const POS_KEY = "chatBubblePos";
   const DRAG_THRESHOLD = 6; // px before we consider it a drag, not a click
@@ -218,21 +225,94 @@
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  function addMessage(role, content) {
+  function stripLoadMarkers(text) {
+    return (text || "").replace(/\[LOAD:\s*[^\]]*\]/g, "").trim();
+  }
+
+  function addMessage(role, content, images = []) {
     const welcome = messagesEl.querySelector(".chat-welcome");
     if (welcome) welcome.remove();
+    if (role === "assistant" && /\[LOAD:/i.test(content)) {
+      content = stripLoadMarkers(content);
+    }
+    if (!Array.isArray(images)) {
+      images = images ? [images] : [];
+    }
 
     const div = document.createElement("div");
     div.className = "chat-msg " + role;
 
-    if (role === "assistant" && (content.includes("[PROMPT]") || content.includes("[NEGATIVE]"))) {
+    if (role === "user") {
+      if (images.length > 0) {
+        if (content) {
+          const t = document.createElement("div");
+          t.textContent = content;
+          div.appendChild(t);
+        }
+        images.forEach((src) => {
+          const im = document.createElement("img");
+          im.className = "chat-user-image";
+          im.src = src;
+          im.alt = "user image";
+          div.appendChild(im);
+        });
+      } else {
+        div.textContent = content;
+      }
+    } else if (role === "assistant" && (content.includes("[PROMPT]") || content.includes("[NEGATIVE]"))) {
       renderAssistantWithPrompt(div, content);
     } else {
       div.textContent = content;
     }
 
     messagesEl.appendChild(div);
+    if (role === "user") {
+      appendRetry(div, content, images);
+    }
     scrollToBottom();
+  }
+
+  function appendRetry(msgDiv, text, images) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chat-retry";
+    btn.title = t("chatRetry") || "重试";
+    btn.textContent = "↻";
+    btn.addEventListener("click", () => loadIntoInput(text, images));
+    msgDiv.appendChild(btn);
+  }
+
+  function getImageSize(dataUrl) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve({ width: img.width, height: img.height });
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
+    });
+  }
+
+  async function loadIntoInput(text, images) {
+    inputEl.value = text || "";
+    inputEl.style.height = "auto";
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 80) + "px";
+    const list = (Array.isArray(images) ? images : (images ? [images] : [])).slice(0, MAX_IMAGES);
+    const items = list.map(src => ({ dataUrl: src, width: null, height: null }));
+    setSelectedImages(items);
+    (async () => {
+      for (const item of items) {
+        const dims = await getImageSize(item.dataUrl);
+        if (dims) {
+          const idx = selectedImages.findIndex(x => x.dataUrl === item.dataUrl);
+          if (idx >= 0) {
+            selectedImages[idx].width = dims.width;
+            selectedImages[idx].height = dims.height;
+          }
+        }
+      }
+      renderPreview();
+      scheduleEstimate();
+    })();
+    inputEl.focus();
   }
 
   function renderAssistantWithPrompt(container, content) {
@@ -331,20 +411,25 @@
     const text = inputEl.value.trim();
     if (!text || isLoading) return;
 
+    scheduleEstimate();
     inputEl.value = "";
     inputEl.style.height = "auto";
     isLoading = true;
     sendBtn.disabled = true;
     inputEl.disabled = true;
 
-    addMessage("user", text);
+    addMessage("user", text, selectedImages.map(x => x.dataUrl));
     showLoading();
 
     try {
       const resp = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({
+          message: text,
+          images: selectedImages.map(x => x.dataUrl),
+          image_sizes: selectedImages.map(x => [x.width || 0, x.height || 0]),
+        }),
       });
 
       removeLoading();
@@ -358,6 +443,8 @@
       } else {
         const data = await resp.json();
         addMessage("assistant", data.content);
+        clearSelectedImages();
+        updateEstimate();
         if (typeof loadQuota === "function") loadQuota();
       }
     } catch (e) {
@@ -379,7 +466,10 @@
       if (messages.length > 0) {
         const welcome = messagesEl.querySelector(".chat-welcome");
         if (welcome) welcome.remove();
-        messages.forEach(m => addMessage(m.role, m.content));
+        messages.forEach(m => {
+          const imgs = m.images && m.images.length ? m.images : (m.image ? [m.image] : []);
+          addMessage(m.role, m.content, imgs);
+        });
       }
     } catch (e) {
       console.error("Failed to load chat history:", e);
@@ -395,10 +485,139 @@
     }
   }
 
+  /* ---------- Image upload (compress -> data URL) ---------- */
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("read error"));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => reject(new Error("invalid image"));
+        img.onload = () => {
+          const MAX = 1024;
+          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+          const mime = file.type === "image/png" ? "image/png" : "image/jpeg";
+          resolve({ dataUrl: canvas.toDataURL(mime, 0.85), width: w, height: h });
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function setSelectedImages(items) {
+    selectedImages = items || [];
+    renderPreview();
+    scheduleEstimate();
+  }
+
+  function renderPreview() {
+    if (!imagePreview) return;
+    imagePreview.innerHTML = "";
+    if (selectedImages.length === 0) {
+      imagePreview.style.display = "none";
+      return;
+    }
+    imagePreview.style.display = "grid";
+    selectedImages.forEach((item, index) => {
+      const wrap = document.createElement("div");
+      wrap.className = "chat-thumb";
+      const img = document.createElement("img");
+      img.src = item.dataUrl;
+      img.alt = "预览图";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chat-thumb-remove";
+      btn.title = t("chatRemoveImage") || "移除图片";
+      btn.textContent = "×";
+      btn.addEventListener("click", () => removeImageAt(index));
+      wrap.appendChild(img);
+      wrap.appendChild(btn);
+      imagePreview.appendChild(wrap);
+    });
+  }
+
+  function addImage(item) {
+    if (selectedImages.length >= MAX_IMAGES) {
+      const label = (t("chatMaxImages") || "最多上传 {n} 张").replace("{n}", MAX_IMAGES);
+      addMessage("assistant", label);
+      return false;
+    }
+    selectedImages.push(item);
+    renderPreview();
+    scheduleEstimate();
+    return true;
+  }
+
+  function removeImageAt(index) {
+    selectedImages.splice(index, 1);
+    renderPreview();
+    scheduleEstimate();
+  }
+
+  function clearSelectedImages() {
+    selectedImages = [];
+    renderPreview();
+    scheduleEstimate();
+    fileInput.value = "";
+  }
+
+  async function updateEstimate() {
+    if (!estimateEl) return;
+    const text = inputEl.value;
+    if (!text.trim() && selectedImages.length === 0) {
+      estimateEl.textContent = "";
+      return;
+    }
+    const body = { message: text };
+    if (selectedImages.length > 0) {
+      body.image_sizes = selectedImages.map(x => [x.width || 0, x.height || 0]);
+    }
+    try {
+      const res = await fetch("/api/chat/estimate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) return;
+      const d = await res.json();
+      const label = t("chatEstimatedCost") || "预计消耗 {n} / {max} 点";
+      estimateEl.textContent = label.replace("{n}", d.cost).replace("{max}", d.max_cost);
+    } catch (e) {
+      console.error("Estimate failed:", e);
+    }
+  }
+
+  function scheduleEstimate() {
+    if (estimateTimer) clearTimeout(estimateTimer);
+    estimateTimer = setTimeout(updateEstimate, 300);
+  }
+
   // Event listeners
   minimizeBtn.addEventListener("click", toggle);
   sendBtn.addEventListener("click", sendMessage);
   clearBtn.addEventListener("click", clearHistory);
+  imageBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    const files = Array.from(fileInput.files || []);
+    if (!files.length) return;
+    for (const file of files) {
+      try {
+        const result = await fileToDataUrl(file);
+        addImage(result);
+      } catch (e) {
+        console.error("Image load failed:", e);
+      }
+    }
+    fileInput.value = "";
+  });
 
   inputEl.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -411,5 +630,6 @@
   inputEl.addEventListener("input", () => {
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(inputEl.scrollHeight, 80) + "px";
+    scheduleEstimate();
   });
 })();

@@ -18,7 +18,8 @@ from ..config import CHAT_DB_PATH, ALLOWED_GUILDS, is_admin, is_blacklisted
 FEATURE_COMMANDS = ["draw", "/draw", "multidraw", "/multidraw",
                     "高清", "切换分辨率", "切换负面", "重置负面",
                     "lora列表", "添加lora", "删除lora", "重置lora",
-                    "partone", "parttwo", "help", "/help"]
+                    "partone", "parttwo", "help", "/help",
+                    "抓取", "/抓取", "!抓取"]
 
 admin_handler = on_message(priority=3, block=False)
 

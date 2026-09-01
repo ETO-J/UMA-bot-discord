@@ -85,7 +85,7 @@
   "126": {
     "inputs": {
       "scheduler": "simple",
-      "steps": 16,
+      "steps": 8,
       "denoise": 1,
       "model": [
         "139",
@@ -181,7 +181,7 @@
   },
   "132": {
     "inputs": {
-      "prompt": "After sex, the girl puttting the used condom on man's chest.",
+      "prompt": "",
       "width": 640,
       "height": 480,
       "length": 124,
@@ -246,8 +246,8 @@
   },
   "139": {
     "inputs": {
-      "lora_name": "gif\\lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16_.safetensors",
-      "strength_model": 0.75,
+      "lora_name": "gif\\minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+      "strength_model": 1,
       "strength_clip": 1,
       "model": [
         "137",

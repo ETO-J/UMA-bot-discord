@@ -2,6 +2,7 @@
 from . import comfyui
 from . import comfyui_monitor
 from . import dailywife
+from . import grabbing
 # 以下模块尚未适配 Discord，暂时禁用
 # from . import settime_message
 # from . import image_search

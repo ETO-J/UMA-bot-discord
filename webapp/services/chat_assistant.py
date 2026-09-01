@@ -1,17 +1,29 @@
-"""Drawing assistant core: persona + skills + chat history → DeepSeek."""
+"""Drawing assistant core: persona + skills + chat history to DeepSeek.
+
+Text and image messages are supported. A lightweight on-demand skill router
+keeps token usage low: the always-on index rule plus a small set of default
+sub-skills are injected; other sub-skills are pulled in only after the model
+declares them via ``[LOAD: <name>]`` markers in a previous reply.
+"""
+import asyncio
 import re
 import logging
+import httpx
+import openai
 
 from config import (
     DEEPSEEK_CHAT_MODEL,
     CHAT_MAX_TOKENS,
     CHAT_TEMPERATURE,
+    DEEPSEEK_MAX_RETRIES,
+    DEEPSEEK_RETRY_DELAY_SECONDS,
 )
 from services.ai_client import deepseek_client
-from services.skill_manager import skill_manager
+from services.skill_manager import skill_manager, DEFAULT_SKILLS
 from services.chat_history_service import chat_history
 
 logger = logging.getLogger(__name__)
+
 
 # --- System prompt with NSFW allowance ---
 BASE_PERSONA = """You are an expert AI drawing prompt engineer. Your sole purpose is to help users craft high-quality English prompts for AI image generation.
@@ -50,17 +62,154 @@ BASE_PERSONA = """You are an expert AI drawing prompt engineer. Your sole purpos
 - Focus on prompt quality: accurate tags, proper structure, good coverage of the user's vision.
 """
 
+
 # --- Marker extraction regex ---
 _PROMPT_RE = re.compile(r"\[PROMPT\]\s*\n?(.*?)\s*\[/PROMPT\]", re.DOTALL)
 _NEGATIVE_RE = re.compile(r"\[NEGATIVE\]\s*\n?(.*?)\s*\[/NEGATIVE\]", re.DOTALL)
 
+# Skill request marker, e.g. "[LOAD: danbooru_tags]" or multiple comma-separated.
+_LOAD_RE = re.compile(r"\[LOAD:\s*(.+?)\]", re.MULTILINE)
 
-def _build_system_prompt() -> str:
-    """Build the full system prompt: base persona + all skills."""
-    skills_content = skill_manager.load_skills()
-    if skills_content:
-        return BASE_PERSONA + "\n\n# Reference Documents\nBelow are workflow guides and tag references:\n\n" + skills_content
-    return BASE_PERSONA
+
+# --- Retry/backoff (transient errors only) ---
+def _is_retryable(exc: Exception) -> bool:
+    """Return True for transient failures worth retrying.
+
+    429/5xx carry status_code. Connection/timeout errors surface as openai
+    APIConnectionError/APITimeoutError or raw httpx.TransportError/OSError.
+    A 4xx such as "model not found" is NOT retried so we fail fast.
+    """
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        return status == 429 or status >= 500
+    if isinstance(exc, (openai.APIConnectionError, openai.APITimeoutError)):
+        return True
+    if isinstance(exc, (httpx.TransportError, TimeoutError, OSError)):
+        return True
+    return False
+
+
+async def _create_with_retry(validate=None, **kwargs):
+    """Wrap the DeepSeek completion call with N attempts and a fixed delay.
+
+    Retries transient API errors, and also retries "empty / no valid marker"
+    responses (via ``validate``) so a blank generation self-heals instead of
+    surfacing an empty reply to the user.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, DEEPSEEK_MAX_RETRIES + 1):
+        try:
+            response = await deepseek_client.chat.completions.create(**kwargs)
+        except Exception as e:  # noqa: BLE001 - re-raised below after backoff
+            last_exc = e
+            if not _is_retryable(e):
+                raise
+            logger.warning(
+                "DeepSeek attempt %d/%d failed (retryable): %s",
+                attempt,
+                DEEPSEEK_MAX_RETRIES,
+                e,
+            )
+            if attempt < DEEPSEEK_MAX_RETRIES:
+                await asyncio.sleep(DEEPSEEK_RETRY_DELAY_SECONDS)
+            continue
+
+        content = (response.choices[0].message.content or "").strip()
+        if validate is not None and not validate(content):
+            logger.warning(
+                "DeepSeek attempt %d/%d returned empty/no-marker content "
+                "(len=%d); retrying",
+                attempt,
+                DEEPSEEK_MAX_RETRIES,
+                len(content),
+            )
+            if attempt < DEEPSEEK_MAX_RETRIES:
+                await asyncio.sleep(DEEPSEEK_RETRY_DELAY_SECONDS)
+                continue
+        return response
+    assert last_exc is not None
+    raise last_exc
+
+
+# --- Skill routing (on-demand injection) ---
+def _extract_loaded_skills(history: list[dict]) -> list[str]:
+    """Collect skill names the model requested via [LOAD] in past replies."""
+    names: list[str] = []
+    for msg in history:
+        if msg.get("role") != "assistant":
+            continue
+        for m in _LOAD_RE.finditer(msg.get("content", "")):
+            for part in m.group(1).split(","):
+                part = part.strip().lower()
+                if not part:
+                    continue
+                if part.endswith(".txt"):
+                    part = part[:-4]
+                names.append(part)
+    # Dedupe while preserving order; drop unknown names quietly.
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for name in names:
+        if name in seen:
+            continue
+        seen.add(name)
+        if skill_manager.has_skill(name):
+            ordered.append(name)
+    return ordered
+
+
+def _strip_load_markers(text: str) -> str:
+    """Remove [LOAD: ...] control markers before sending to the model."""
+    if not text:
+        return ""
+    return _LOAD_RE.sub("", text).strip()
+
+
+def _build_system_prompt(loaded_skills: list[str]) -> str:
+    """Persona + router index + default skills + declared sub-skills."""
+    parts = [BASE_PERSONA]
+    index = skill_manager.load_index()
+    if index:
+        parts.append("# Skills Router\n" + index)
+
+    added: set[str] = set()
+    for name in list(DEFAULT_SKILLS) + list(loaded_skills):
+        name = name.strip().lower()
+        if not name or name in added:
+            continue
+        added.add(name)
+        content = skill_manager.load_skill(name)
+        if content:
+            parts.append(f"=== {name} ===\n{content}")
+    return "\n\n".join(parts)
+
+
+# --- Multimodal message building ---
+def _build_messages(history: list[dict], system_prompt: str) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    for msg in history:
+        role = msg.get("role", "user")
+        text = _strip_load_markers(msg.get("content", ""))
+        paths = msg.get("image_paths") or (
+            [msg["image_path"]] if msg.get("image_path") else []
+        )
+        is_image = msg.get("content_type") == "image" and bool(paths)
+        if is_image:
+            data_urls = chat_history.load_images_data_urls(paths)
+            parts: list[dict] = []
+            if text:
+                parts.append({"type": "text", "text": text})
+            for data_url in data_urls:
+                parts.append(
+                    {"type": "image_url", "image_url": {"url": data_url}}
+                )
+            if not parts:
+                continue
+            content = parts
+        else:
+            content = text
+        messages.append({"role": role, "content": content})
+    return messages
 
 
 def _extract_markers(text: str) -> dict:
@@ -75,42 +224,62 @@ def _extract_markers(text: str) -> dict:
     return result
 
 
-async def chat_with_artist(user_id: str, user_message: str) -> dict:
-    """Send a message to the drawing assistant and return the response.
+def _is_useful_response(text: str) -> bool:
+    """A useful response is non-blank and carries at least one prompt marker."""
+    if not text or not text.strip():
+        return False
+    extracted = _extract_markers(text)
+    return extracted["prompt"] is not None or extracted["negative"] is not None
+
+
+async def chat_with_artist(
+    user_id: str,
+    user_message: str,
+    images: list[str] | None = None,
+) -> dict:
+    """Send a message (+ optional image) to the drawing assistant.
 
     Returns dict with keys: content, prompt, negative.
     Raises Exception on API failure.
     """
-    # Save user message
-    chat_history.save_message(user_id, "user", user_message)
+    # Persist the user message, caching any image to disk first.
+    image_paths = None
+    if images:
+        image_paths = chat_history.save_images(user_id, images)
+    chat_history.save_message(
+        user_id,
+        "user",
+        user_message,
+        content_type="image" if image_paths else "text",
+        image_path=image_paths[0] if image_paths else None,
+        image_paths=image_paths,
+    )
 
-    # Build messages array
-    system_prompt = _build_system_prompt()
+    # Load history, decide which sub-skills to inject, build the context.
     history = chat_history.get_recent_messages(user_id)
+    loaded_skills = _extract_loaded_skills(history)
+    system_prompt = _build_system_prompt(loaded_skills)
+    messages = _build_messages(history, system_prompt)
 
-    messages = [{"role": "system", "content": system_prompt}]
-    for msg in history:
-        messages.append({"role": msg["role"], "content": msg["content"]})
-    # The last message is the one we just saved, so it's already in history
-
-    # Call DeepSeek
+    # Call DeepSeek (timeout on the http client + retry backoff here).
     try:
-        response = await deepseek_client.chat.completions.create(
+        response = await _create_with_retry(
+            validate=_is_useful_response,
             model=DEEPSEEK_CHAT_MODEL,
             messages=messages,
             max_tokens=CHAT_MAX_TOKENS,
             temperature=CHAT_TEMPERATURE,
         )
         ai_content = response.choices[0].message.content
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surfaced to caller
         logger.error("DeepSeek API error: %s", e)
-        # Remove the user message we just saved since we couldn't respond
+        # Remove the user message we just saved since we couldn't respond.
         raise Exception(f"AI service unavailable: {e}")
 
-    # Save assistant response
+    # Save assistant response.
     chat_history.save_message(user_id, "assistant", ai_content)
 
-    # Extract prompt/negative markers
+    # Extract prompt/negative markers.
     extracted = _extract_markers(ai_content)
 
     return {

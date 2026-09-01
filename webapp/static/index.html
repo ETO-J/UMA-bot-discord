@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bourbon Webui</title>
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/css/style.css?v=27">
+<link rel="stylesheet" href="/css/style.css?v=28">
 </head>
 <body>
 
@@ -343,18 +343,22 @@
   <div id="chat-messages" class="chat-messages">
     <div class="chat-welcome" data-i18n="chatWelcome">你好！我是绘画助手，可以帮你将想法转化为精准的英文绘图提示词。试着告诉我你想画什么吧~</div>
   </div>
+  <div id="chat-image-preview" class="chat-image-preview" style="display:none"></div>
+  <div id="chat-estimate" class="chat-estimate" data-i18n="chatEstimatedCost"></div>
   <div class="chat-input-row">
     <textarea id="chat-input" rows="1" data-i18n-placeholder="chatPlaceholder" placeholder="描述你的绘图想法..."></textarea>
+    <button id="chat-image-btn" class="chat-image-btn" data-i18n-title="chatUploadHint" title="上传图片">&#128247;</button>
     <button id="chat-send" class="chat-send-btn" data-i18n="chatSend">发送</button>
   </div>
+  <input type="file" id="chat-file" accept="image/*" multiple style="display:none">
   <div class="chat-footer">
     <button id="chat-clear" class="chat-clear-btn" data-i18n="chatClear">清除对话</button>
   </div>
 </div>
 
-    <script src="/js/i18n.js?v=27"></script>
-    <script src="/js/api.js?v=27"></script>
-    <script src="/js/chat.js?v=27"></script>
-    <script src="/js/app.js?v=27"></script>
+    <script src="/js/i18n.js?v=28"></script>
+    <script src="/js/api.js?v=28"></script>
+    <script src="/js/chat.js?v=28"></script>
+    <script src="/js/app.js?v=28"></script>
 </body>
 </html>

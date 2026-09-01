@@ -13,8 +13,17 @@ PIXIV_IMAGES_DIR = PROJECT_ROOT / "pixiv_images"
 COMFYUI_DIR = PROJECT_ROOT / "comfyui"
 AISSETTING_DIR = DATA_DIR / "aisetting"
 ERROR_IMAGES_DIR = IMAGES_DIR / "errors"
+GRABBING_DATA_DIR = DATA_DIR / "grabbing_data"
 
-for d in [DATA_DIR, IMAGES_DIR, PIXIV_IMAGES_DIR, ERROR_IMAGES_DIR, AISSETTING_DIR, COMFYUI_DIR]:
+for d in [
+    DATA_DIR,
+    IMAGES_DIR,
+    PIXIV_IMAGES_DIR,
+    ERROR_IMAGES_DIR,
+    AISSETTING_DIR,
+    COMFYUI_DIR,
+    GRABBING_DATA_DIR,
+]:
     d.mkdir(parents=True, exist_ok=True)
 
 # === 管理员（Discord 字符串 ID）===

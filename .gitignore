@@ -163,6 +163,7 @@ data/knowledge_db/*.pkl
 data/knowledge_db/.version
 data/comfyuisetting/
 data/model_cache/
+data/grabbing_data/
 
 # Archived old plugin versions (not current code)
 bpdiscord/plugins/bpdiscord_history/

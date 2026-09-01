@@ -58,11 +58,24 @@ VIDEO_FPS = 24
 AISSETTING_DIR = DATA_DIR / "aisetting"
 ARTIST_SKILLS_DIR = AISSETTING_DIR / "skills"
 ARTIST_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-DEEPSEEK_CHAT_MODEL = "deepseek-v4-flash"
+DEEPSEEK_CHAT_MODEL = "deepseek-v4-flash-vision-exp"
 CHAT_MAX_ROUNDS = 20
 CHAT_MAX_TOKENS = 4096
-CHAT_TEMPERATURE = 1.0
-ARTIST_CHAT_COST = 10000
+CHAT_TEMPERATURE = 0.8
+# Dynamic input-token billing (mirrors DeepSeek vision image rules).
+# Any single chat message is capped at CHAT_MAX_COST quota points.
+CHAT_MAX_COST = 100
+# Max reference images per chat message.
+CHAT_MAX_IMAGES = 5
+# DeepSeek vision: an image is converted to input tokens by its (post-resize)
+# dimensions and is capped at 384 tokens/image.
+CHAT_IMAGE_MAX_TOKEN = 384
+# Pixel->token scale so a ~800x800 equivalent image maps to roughly 384 tokens:
+# 800*800 / 1667 ~= 384. Lower-res images cost proportionally fewer tokens.
+CHAT_IMAGE_TOKEN_PX = 1667
+# DeepSeek call retry policy: up to 3 attempts, 10s between retries.
+DEEPSEEK_MAX_RETRIES = 3
+DEEPSEEK_RETRY_DELAY_SECONDS = 10
 
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
