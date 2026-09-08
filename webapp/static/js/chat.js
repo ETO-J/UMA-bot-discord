@@ -370,7 +370,7 @@
 
   function applyToForm(promptText, negativeText) {
     const wf = document.getElementById("sel-workflow").value;
-    const isAnimaLike = wf === "discord_anima_v2" || wf === "discord_差分";
+    const isAnimaLike = wf === "discord_anima_v2" || wf === "discord_anima_fast" || wf === "discord_差分";
 
     if (promptText) {
       if (isAnimaLike) {

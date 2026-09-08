@@ -25,6 +25,7 @@ ANIMA_WORKFLOWS = {
     "discord_anima",
     "discord_anima_v2",
     "discord_anima_new",
+    "discord_anima_fast",
     "discord_anima_高清",
     "discord_差分",
 }
@@ -38,6 +39,31 @@ TASK_IMAGE_DIR = DB_DIR / "task_images"
 TASK_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 WORKFLOW_DIR = COMFYUI_DIR
 
+# --- Asset library / media storage ---
+ASSET_LIBRARY_ROOT = Path(os.getenv("ASSET_LIBRARY_ROOT", r"D:\civitai\数字资产库"))
+ASSET_DB_PATH = DATA_DIR / "assets" / "assets.db"
+ASSET_THUMB_DIR = ASSET_LIBRARY_ROOT / "thumbs"
+ASSET_BLOB_DIR = ASSET_LIBRARY_ROOT / "blobs"
+
+# Direct Ref2VA upload cache (not counted as asset-library storage).
+VIDEO_UPLOAD_DIR = DATA_DIR / "video_uploads"
+VIDEO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Per-user asset-library quotas are derived from limit_count.
+# limit_count < 1000 -> disabled; 1000..39999 -> 100 MB; >= 40000 -> 1 GB.
+ASSET_LIBRARY_DISABLED_LIMIT = 1000
+ASSET_LIBRARY_MEDIUM_LIMIT = 1000
+ASSET_LIBRARY_MEDIUM_BYTES = 100 * 1024 * 1024
+ASSET_LIBRARY_LARGE_LIMIT = 40000
+ASSET_LIBRARY_LARGE_BYTES = 1024 * 1024 * 1024
+# Single upload caps; full quota still governs total storage.
+ASSET_MAX_IMAGE_BYTES = 30 * 1024 * 1024
+ASSET_MAX_VIDEO_BYTES = 200 * 1024 * 1024
+ASSET_MAX_AUDIO_BYTES = 50 * 1024 * 1024
+
+# Ref2VA generation pricing.
+REF2VA_COST_MULTIPLIER = 1.5
+
 VIDEO_RESOLUTIONS = {
     "480p": {"portrait": (480, 640), "square": (512, 512), "landscape": (640, 480)},
     # MiniMax H3's video latent is width/16 x height/16, and patchify_video
@@ -45,6 +71,28 @@ VIDEO_RESOLUTIONS = {
     # True 720 (720//16 = 45, odd) makes patchify throw, so use a 1280x736
     # canvas instead (both are multiples of 32; latent 80x46 is even).
     "720p": {"portrait": (736, 1280), "square": (736, 736), "landscape": (1280, 736)},
+}
+# Ref2VA/FL2VA canvas uses input aspect ratio + megapixel coefficient:
+# 480p -> 0.4 MP, 720p -> 0.8 MP.
+VIDEO_MEGAPIXELS = {"480p": 0.4, "720p": 0.8}
+# Manual Ref2VA aspect ratios matching ComfyUI ResolutionSelector.
+VIDEO_ASPECT_RATIOS = {
+    "1:1": (1, 1),
+    "2:3": (2, 3),
+    "3:2": (3, 2),
+    "4:3": (4, 3),
+    "3:4": (3, 4),
+    "16:9": (16, 9),
+    "9:16": (9, 16),
+}
+VIDEO_ASPECT_RATIO_LABELS = {
+    "1:1": "1:1 (Square)",
+    "2:3": "2:3 (Portrait Photo)",
+    "3:2": "3:2 (Photo)",
+    "4:3": "4:3 (Standard)",
+    "3:4": "3:4 (Portrait Standard)",
+    "16:9": "16:9 (Widescreen)",
+    "9:16": "9:16 (Portrait Widescreen)",
 }
 # Per-second quota for 1-10s video.  720p is 4x the 480p rate; durations
 # 11-15s double the per-second rate (e.g. 480p 11-15s = 100/s, 720p =
@@ -84,6 +132,18 @@ DISCORD_PROXY = os.getenv("DISCORD_PROXY", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production")
 AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "false").lower() == "true"
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", "1440336869144395868")
+
+# --- Public asset library -> Discord channel sync ---
+# The bot token (DiscordToken) is shared with the NoneBot2 process, so the
+# webapp posts/deletes messages using the same bot account.
+DISCORD_BOT_TOKEN = os.getenv("DiscordToken", "")
+DISCORD_API_BASE = os.getenv("DISCORD_API_BASE", "https://discord.com/api/v10")
+# Guild + channel that receives publish announcements; empty string disables.
+ASSET_PUBLISH_GUILD_ID = os.getenv("ASSET_PUBLISH_GUILD_ID", "1525712372306677991")
+ASSET_PUBLISH_CHANNEL_ID = os.getenv("ASSET_PUBLISH_CHANNEL_ID", "1546739758871609386")
+# Max attachment size for the feed message; larger media degrades to
+# thumbnail-only (or text-only) messages instead of failing.
+ASSET_DISCORD_MAX_UPLOAD_MB = int(os.getenv("ASSET_DISCORD_MAX_UPLOAD_MB", "10"))
 
 COMFYUI_DEFAULT_RESOLUTIONS = {
     "1": (832, 1216),
@@ -146,6 +206,35 @@ WORKFLOW_CONFIGS = {
         "hd_cfg": 5.0,
         "hd_denoise": 0.75,
     },
+    "discord_anima_fast": {
+        "model_source": ["75", 0],
+        "clip_source": ["75", 1],
+        "pos_node_id": None,
+        "neg_node_id": "68",
+        "supports_lora": True,
+        "lora_start_id": 1000,
+        "lora_type": "LoraLoaderModelOnly",
+        "bridging_model_node": "73",
+        "bridging_positive_node": "73",
+        "prompt_pack_node": "72",
+        "prompt_field": "base_prompt",
+        "prompt_class_type": "AnimaArtistPack",
+        # The workflow is text-to-image driven through the fixed turbo LoRA
+        # (node 75). User-selectable anima LoRAs are stacked after it (model
+        # only), so the turbo accelerator + its CLIP half stay untouched.
+        "hd_enabled": True,
+        # Unlike anima_v2/diff, this workflow ships its own upscale+refine
+        # chain (nodes 82/83/85/88) wired into the SaveImage node. Let the HD
+        # toggle switch it on/off instead of injecting another chain.
+        "builtin_hd": True,
+        "builtin_save_node": "86",
+        "builtin_base_decode_node": "84",
+        "hd_scale": 1.5,
+        "hd_upscale_method": "nearest-exact",
+        "hd_steps": 8,
+        "hd_cfg": 1.0,
+        "hd_denoise": 0.75,
+    },
     "discord_差分": {
         "model_source": ["64", 0],
         "clip_source": ["66", 0],
@@ -193,6 +282,23 @@ WORKFLOW_CONFIGS = {
         "model_source": ["137", 0],
         "clip_source": ["129", 0],
     },
+    "webui_video_ref": {
+        # Ref2VA uses the provided workflow with a fixed accelerator LoRA and
+        # fixed 8-step schedule; dynamic user LoRAs are intentionally disabled.
+        "supports_lora": False,
+        "workflow_file": "webui-minimax-h3-r2v",
+        "video_node_id": "136",
+        "prompt_node_id": "138",
+        "duration_node_id": "132",
+        "seed_node_id": "129",
+        "resolution_selector_node_id": "115",
+        "steps_node_id": "124",
+        "accelerator_lora_node_id": "149",
+        "ref_image_size": "match",
+        "last_frame_save_node_id": "148",
+        "last_frame_parent_node_id": "147",
+        "last_frame_components_node_id": "146",
+    },
     "discord_flux2_9b_edit": {
         "supports_lora": False,
         "supports_reference": True,
@@ -215,5 +321,12 @@ WORKFLOW_CONFIGS = {
         "vae_source": ["75:72", 0],
         "ref_chain_start_id": 3000,
         "flux2_edit_cost": 20,
+        # BiRefNet cutout (merged from comfyui/user/default/workflows/flux2_自动扣图.json)
+        "cutout_node_id": "2100",
+        "cutout_model": "BiRefNet-general",
+        "cutout_edit_save_prefix": "Flux2-Klein-9b_cutout",
+        "cutout_direct_save_prefix": "Flux2_cutout",
+        "flux2_edit_cutout_cost": 20,
+        "flux2_cutout_cost": 1,
     },
 }

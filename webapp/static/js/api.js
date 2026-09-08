@@ -37,6 +37,10 @@ const API = {
     return res.blob();
   },
 
+  async _form(path, formData) {
+    return this._json(path, { method: "POST", body: formData });
+  },
+
   // Draw
   async drawAsync(prompt, advanced = {}) {
     const body = { prompt, ...advanced };
@@ -102,12 +106,111 @@ const API = {
     });
   },
 
-  async flux2EditAsync(prompt, sourceImage, referenceImage, negativePrompt, advanced = {}) {
+  async uploadVideoReference(file, storeToLibrary = true) {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("store_to_library", storeToLibrary ? "true" : "false");
+    return this._form("/video/uploads", form);
+  },
+
+  // Asset library
+  async getAssetQuota() {
+    return this._json("/assets/quota");
+  },
+
+  async uploadAsset(file, meta = {}) {
+    const form = new FormData();
+    form.append("file", file);
+    Object.entries(meta).forEach(([key, value]) => {
+      if (value != null && value !== "") form.append(key, String(value));
+    });
+    return this._form("/assets", form);
+  },
+
+  async listAssetFolders() {
+    return this._json("/assets/folders");
+  },
+
+  async createAssetFolder(name, parentId = null) {
+    return this._json("/assets/folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, parent_id: parentId }),
+    });
+  },
+
+  async getAssetFolderStats(folderId) {
+    return this._json(`/assets/folders/${folderId}/stats`);
+  },
+
+  async deleteAssetFolder(folderId, confirm = false) {
+    return this._json(`/assets/folders/${folderId}?confirm=${confirm ? "true" : "false"}`, {
+      method: "DELETE",
+    });
+  },
+
+  async listAssets(params = {}) {
+    const q = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value != null && value !== "") q.set(key, String(value));
+    });
+    const suffix = q.toString() ? "?" + q.toString() : "";
+    return this._json("/assets" + suffix);
+  },
+
+  async publishAsset(assetId) {
+    return this._json(`/assets/${assetId}/publish`, { method: "POST" });
+  },
+
+  async unpublishAsset(assetId) {
+    return this._json(`/assets/${assetId}/unpublish`, { method: "POST" });
+  },
+
+  async savePublicAsset(publishedId, folderId = "") {
+    const q = folderId ? "?folder_id=" + encodeURIComponent(folderId) : "";
+    return this._json(`/assets/public/${publishedId}/save${q}`, { method: "POST" });
+  },
+
+  async likePublicAsset(publishedId, liked = true) {
+    return this._json(`/assets/public/${publishedId}/like`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ liked: !!liked }),
+    });
+  },
+
+  async uploadPublicAsset(file, meta = {}) {
+    const form = new FormData();
+    form.append("file", file);
+    Object.entries(meta).forEach(([key, value]) => {
+      if (value != null && value !== "") form.append(key, String(value));
+    });
+    return this._form("/assets/public/upload", form);
+  },
+
+  async updatePublicAsset(publishedId, meta = {}) {
+    return this._json(`/assets/public/${publishedId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(meta),
+    });
+  },
+
+  async deletePublicAsset(publishedId) {
+    return this._json(`/assets/public/${publishedId}`, { method: "DELETE" });
+  },
+
+  async deleteAsset(assetId) {
+    return this._json(`/assets/${assetId}`, { method: "DELETE" });
+  },
+
+  async flux2EditAsync(prompt, sourceImage, referenceImage, negativePrompt, advanced = {}, mode = "edit") {
     const body = {
       prompt,
       source_image: sourceImage,
       reference_image: referenceImage || null,
       negative_prompt: negativePrompt || null,
+      mode,
       ...advanced,
     };
     Object.keys(body).forEach(k => {
@@ -130,6 +233,10 @@ const API = {
 
   async getTaskVideo(taskId) {
     return this._blob(`/task/${taskId}/video`);
+  },
+
+  async getTaskLastFrame(taskId) {
+    return this._blob(`/task/${taskId}/last-frame`);
   },
 
   async listTasks() {

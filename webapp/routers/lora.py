@@ -41,10 +41,10 @@ def _thumb_url_map() -> dict[str, str]:
 async def get_lora_list(workflow: str | None = None, user_id: str = Depends(get_current_user_id)):
     settings = wm.get_user_settings(user_id)
     if workflow is None:
-        workflow = settings.get("workflow", "discord_anima_v2")
+        workflow = settings.get("workflow", "discord_anima_fast")
     lora_dict = wm.get_lora_list(workflow)
     active = settings.get("active_loras", {})
-    if workflow == "webui_video":
+    if workflow in {"webui_video", "webui_video_ref"}:
         label = "Video"
         fixed = set(WORKFLOW_CONFIGS.get("webui_video", {}).get("fixed_lora_names", []))
         if fixed:

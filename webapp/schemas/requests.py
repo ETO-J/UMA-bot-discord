@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -36,9 +38,18 @@ class MultidrawRequest(BaseModel):
 
 class VideoRequest(BaseModel):
     prompt: str
-    start_image: str
+    start_image: str | None = None
     end_image: str | None = None
+    video_mode: Literal["fl2va", "ref2va"] = "fl2va"
+    reference_image_uploads: list[str] | None = None
+    reference_video_uploads: list[str] | None = None
+    reference_audio_uploads: list[str] | None = None
+    reference_image_asset_ids: list[str] | None = None
+    reference_video_asset_ids: list[str] | None = None
+    reference_audio_asset_ids: list[str] | None = None
+    output_last_frame: bool = False
     quality: str = "480p"
+    aspect_ratio: str | None = None
     duration: int = Field(default=5, ge=1, le=15)
     orientation: str = "portrait"
     seed: int | None = None
@@ -77,6 +88,8 @@ class Flux2EditRequest(BaseModel):
     steps: int | None = None
     cfg: float | None = None
     sampler_name: str | None = None
+    # edit (default) | edit_cutout (Flux2 edit + BiRefNet cutout) | cutout (direct cutout without Flux2)
+    mode: Literal["edit", "edit_cutout", "cutout"] = "edit"
 
 
 class ChatSendRequest(BaseModel):
@@ -146,12 +159,27 @@ class TaskResponse(BaseModel):
     estimated_seconds: float | None = None
     elapsed_seconds: float | None = None
     is_running: bool | None = None
+    has_last_frame: bool = False
+    video_mode: str | None = None
+    reference_ids: dict | None = None
+    params: dict | None = None
 
 
 class QuotaResponse(BaseModel):
     limit: int
     used: int
     remaining: int
+    asset_limit_bytes: int = 0
+    asset_used_bytes: int = 0
+    asset_remaining_bytes: int = 0
+    asset_enabled: bool = False
+    is_admin: bool = False
+
+
+class PublishedUpdateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
 
 
 class SettingsResponse(BaseModel):
@@ -170,3 +198,84 @@ class LoraListResponse(BaseModel):
     active: dict[str, float]
     workflow_label: str
     thumb_urls: dict[str, str | None] = {}
+
+
+class TempUploadResponse(BaseModel):
+    id: str
+    kind: str
+    size_bytes: int
+    storage_mode: str = "temp"
+    asset_id: str | None = None
+    upload_id: str | None = None
+    thumbnail_url: str | None = None
+
+
+class AssetFolderRequest(BaseModel):
+    name: str
+    parent_id: str | None = None
+
+
+class AssetFolderResponse(BaseModel):
+    id: str
+    name: str
+    parent_id: str | None = None
+    asset_count: int = 0
+    is_root: bool = False
+
+
+class AssetResponse(BaseModel):
+    id: str
+    kind: str
+    title: str
+    description: str = ""
+    tags: list[str] = []
+    folder_id: str | None = None
+    visibility: str = "private"
+    mime_type: str
+    size_bytes: int
+    width: int | None = None
+    height: int | None = None
+    duration: float | None = None
+    subject_key: str | None = None
+    subject_role: str | None = None
+    created_at: float
+    updated_at: float
+    file_url: str
+    thumbnail_url: str | None = None
+    published_id: str | None = None
+    # Published (public library) extras.
+    publisher_id: str | None = None
+    publisher_name: str = ""
+    discord_message_id: str | None = None
+    like_count: int = 0
+    liked_by_me: bool = False
+    discord_posted: bool | None = None
+    discord_error: str | None = None
+
+
+class LikeRequest(BaseModel):
+    liked: bool = True
+
+
+class LikeResponse(BaseModel):
+    published_id: str
+    like_count: int
+    liked: bool
+
+
+class AssetListResponse(BaseModel):
+    items: list[AssetResponse]
+    used_bytes: int
+    limit_bytes: int
+    enabled: bool
+
+
+class AssetUpdateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    folder_id: str | None = None
+    visibility: Literal["private", "shared"] | None = None
+    subject_key: str | None = None
+    subject_aliases: str | None = None
+    subject_role: str | None = None

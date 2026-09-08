@@ -5,8 +5,13 @@ import random
 import shutil
 import time
 import base64
+import io
+import math
 import logging
+import mimetypes
+from pathlib import Path
 import aiohttp
+from PIL import Image
 
 from config import (
     COMFYUI_URL,
@@ -15,9 +20,14 @@ from config import (
     WORKFLOW_CONFIGS,
     VIDEO_RESOLUTIONS,
     VIDEO_FPS,
+    VIDEO_MEGAPIXELS,
+    VIDEO_ASPECT_RATIOS,
+    VIDEO_ASPECT_RATIO_LABELS,
 )
 from services.task_queue import task_queue
 from services.workflow_manager import wm
+from services.media_store import temp_media_store
+from services.asset_library import asset_library
 
 logger = logging.getLogger(__name__)
 
@@ -307,20 +317,11 @@ async def _poll_history(session: aiohttp.ClientSession, prompt_id: str) -> list[
     return None
 
 
-async def _download_output(session: aiohttp.ClientSession, file_infos: list[dict]) -> bytes | None:
-    """Download the primary output and schedule the move of every output file.
-
-    The first persisted output is returned to the caller; *all* persisted
-    outputs (e.g. batch generations) are moved out of the ComfyUI output dir
-    so nothing accumulates there.  Previews are already filtered out by
-    ``_collect_outputs``.
-    """
-    if not file_infos:
-        return None
-    primary = file_infos[0]
-    filename = primary["filename"]
-    subfolder = primary.get("subfolder", "")
-    file_type = primary.get("type", "output")
+async def _download_single(session: aiohttp.ClientSession, info: dict) -> bytes | None:
+    """Download one persisted ComfyUI output file."""
+    filename = info["filename"]
+    subfolder = info.get("subfolder", "")
+    file_type = info.get("type", "output")
     params = {"filename": filename}
     if subfolder:
         params["subfolder"] = subfolder
@@ -331,17 +332,56 @@ async def _download_output(session: aiohttp.ClientSession, file_infos: list[dict
             if resp.status != 200:
                 logger.error("Failed to download %s: HTTP %s", filename, resp.status)
                 return None
-            data = await resp.read()
+            return await resp.read()
     except Exception as e:
         logger.error("Download exception: %s", e)
         return None
+
+
+def _preferred_output_order(file_infos: list[dict], prefer_ext: str | None = None) -> list[dict]:
+    if prefer_ext:
+        preferred_suffixes = set(prefer_ext.split(","))
+        return sorted(
+            file_infos,
+            key=lambda info: (
+                0 if Path(info["filename"]).suffix.lower().lstrip(".") in preferred_suffixes else 1
+            ),
+        )
+    return list(file_infos)
+
+
+async def _download_all_outputs(
+    session: aiohttp.ClientSession,
+    file_infos: list[dict],
+    prefer_ext: str | None = None,
+) -> list[tuple[dict, bytes]]:
+    """Download every output, then schedule moves.
+
+    All bytes are collected before any file is moved so callers can return
+    both a video and its extracted last frame.
+    """
+    results: list[tuple[dict, bytes]] = []
+    for info in _preferred_output_order(file_infos, prefer_ext):
+        data = await _download_single(session, info)
+        if data is not None:
+            results.append((info, data))
     for info in file_infos:
         try:
             task_queue.register_generated_file(info["filename"], info.get("subfolder", ""))
         except Exception as e:
             logger.warning("Failed to register generated file %s: %s", info["filename"], e)
         _spawn_move_task(info["filename"], info.get("subfolder", ""))
-    return data
+    return results
+
+
+async def _download_output(session: aiohttp.ClientSession, file_infos: list[dict]) -> bytes | None:
+    """Download the primary output and schedule the move of every output file."""
+    if not file_infos:
+        return None
+    results = await _download_all_outputs(session, file_infos)
+    if not results:
+        return None
+    return results[0][1]
 
 
 async def _submit_and_wait(
@@ -350,6 +390,23 @@ async def _submit_and_wait(
     client_id: str,
     on_prompt_submitted=None,
 ) -> bytes | None:
+    """Submit and return the first persisted output (backward-compatible)."""
+    results = await _submit_and_wait_outputs(
+        session,
+        workflow_data,
+        client_id,
+        on_prompt_submitted,
+    )
+    return results[0][1] if results else None
+
+
+async def _submit_and_wait_outputs(
+    session: aiohttp.ClientSession,
+    workflow_data: dict,
+    client_id: str,
+    on_prompt_submitted=None,
+    prefer_ext: str | None = None,
+) -> list[tuple[dict, bytes]]:
     """Submit *workflow_data* to ComfyUI and wait for the result image.
 
     Uses WebSocket for real-time completion detection, with automatic
@@ -370,7 +427,7 @@ async def _submit_and_wait(
         async with session.post(f"{COMFYUI_URL}/prompt", json=payload) as response:
             if response.status != 200:
                 logger.error("ComfyUI Error: %s", await response.text())
-                return None
+                return []
             resp_json = await response.json()
             prompt_id = resp_json.get("prompt_id")
 
@@ -392,8 +449,8 @@ async def _submit_and_wait(
             await ws.close()
 
     if file_info:
-        return await _download_output(session, file_info)
-    return None
+        return await _download_all_outputs(session, file_info, prefer_ext=prefer_ext)
+    return []
 
 
 def _inject_hd_nodes(workflow_data: dict, config: dict) -> None:
@@ -510,7 +567,7 @@ def _inject_hd_nodes(workflow_data: dict, config: dict) -> None:
 async def generate_image(
     input_prompt: str,
     user_id: str,
-    workflow_name: str = "discord_anima_v2",
+    workflow_name: str = "discord_anima_fast",
     seed: int | None = None,
     sampler_name: str | None = None,
     scheduler: str | None = None,
@@ -521,7 +578,7 @@ async def generate_image(
     source_image_b64: str | None = None,
     on_prompt_submitted=None,
 ) -> bytes | None:
-    target_name = workflow_name or "discord_anima_v2"
+    target_name = workflow_name or "discord_anima_fast"
 
     workflow_data = wm.load_workflow_data(target_name)
     if not workflow_data:
@@ -626,7 +683,22 @@ async def generate_image(
             node_data["inputs"]["width"] = target_width
             node_data["inputs"]["height"] = target_height
 
-    if hd_mode and config.get("hd_enabled"):
+    if config.get("builtin_hd"):
+        # discord_anima_fast already carries its own upscale+refine chain wired
+        # into the SaveImage node. HD mode leaves it intact; non-HD mode bypasses
+        # it so the base decode is saved directly (the refine chain is pruned as
+        # it becomes unreachable from the output).
+        if not hd_mode:
+            save_node = config.get("builtin_save_node")
+            base_decode = config.get("builtin_base_decode_node")
+            if save_node and base_decode and save_node in workflow_data and base_decode in workflow_data:
+                workflow_data[save_node]["inputs"]["images"] = [base_decode, 0]
+                logger.info(
+                    "Builtin-HD %s: HD off, straight saves base decode %s",
+                    target_name,
+                    base_decode,
+                )
+    elif hd_mode and config.get("hd_enabled"):
         _inject_hd_nodes(workflow_data, config)
 
     client_id = str(uuid.uuid4())
@@ -809,6 +881,37 @@ async def _upload_image(session: aiohttp.ClientSession, image_b64: str) -> str |
         return None
 
 
+async def _upload_media_file(
+    session: aiohttp.ClientSession,
+    path: Path,
+    content_type: str = "application/octet-stream",
+) -> str | None:
+    """Upload any reference media file into the ComfyUI input directory."""
+    try:
+        data = path.read_bytes()
+        ext = path.suffix.lower() or ".bin"
+        form = aiohttp.FormData()
+        form.add_field(
+            "image",
+            data,
+            filename=f"webui_{uuid.uuid4().hex}{ext}",
+            content_type=content_type,
+        )
+        async with session.post(f"{COMFYUI_URL}/upload/image", data=form) as resp:
+            if resp.status != 200:
+                logger.error("Media upload failed: HTTP %s", resp.status)
+                return None
+            response = await resp.json()
+            name = response.get("name")
+            subfolder = response.get("subfolder", "")
+            if not name:
+                return None
+            return f"{subfolder}/{name}" if subfolder else name
+    except Exception as e:
+        logger.error("Media upload exception: %s", e)
+        return None
+
+
 def _align_h3_frames(length: int) -> int:
     """Snap a frame count up to MiniMax H3's 17k+5 grid (124 = ~5s)."""
     n = max(5, int(length))
@@ -822,6 +925,43 @@ def _snap_h3_dim(value: int) -> int:
     return max(32, round(int(value) / 32.0) * 32)
 
 
+def _canvas_from_ratio(ratio_w: float, ratio_h: float, quality: str) -> tuple[int, int]:
+    """Mirror ComfyUI ResolutionSelector: ratio * megapixel target, snap to 32."""
+    megapixels = VIDEO_MEGAPIXELS.get(quality, VIDEO_MEGAPIXELS["480p"])
+    total_pixels = megapixels * 1024 * 1024
+    scale = math.sqrt(total_pixels / max(0.01, ratio_w * ratio_h))
+    width = _snap_h3_dim(round(ratio_w * scale / 32.0) * 32)
+    height = _snap_h3_dim(round(ratio_h * scale / 32.0) * 32)
+    return width, height
+
+
+def _canvas_from_image_bytes(
+    image_b64: str,
+    quality: str,
+    fallback: tuple[int, int],
+) -> tuple[int, int]:
+    try:
+        data = base64.b64decode(image_b64)
+        with Image.open(io.BytesIO(data)) as img:
+            return _canvas_from_ratio(img.width, img.height, quality)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Cannot derive canvas from first frame: %s", exc)
+        return fallback
+
+
+def _canvas_from_image_path(
+    path: Path,
+    quality: str,
+    fallback: tuple[int, int],
+) -> tuple[int, int]:
+    try:
+        with Image.open(path) as img:
+            return _canvas_from_ratio(img.width, img.height, quality)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Cannot derive canvas from reference image: %s", exc)
+        return fallback
+
+
 async def generate_video(
     prompt: str,
     start_image_b64: str,
@@ -830,6 +970,7 @@ async def generate_video(
     height: int,
     length: int,
     user_id: str,
+    quality: str = "480p",
     seed: int | None = None,
     on_prompt_submitted=None,
 ) -> bytes | None:
@@ -875,8 +1016,11 @@ async def generate_video(
             # MiniMax H3's latent is width/16 x height/16 and patchify_video
             # needs both to be even, i.e. width/height must be multiples of 32.
             # Guard against any non-32-multiple dimension reaching ComfyUI.
-            canvas_w = _snap_h3_dim(width)
-            canvas_h = _snap_h3_dim(height)
+            canvas_w, canvas_h = _canvas_from_image_bytes(
+                start_image_b64,
+                quality,
+                (_snap_h3_dim(width), _snap_h3_dim(height)),
+            )
             if (canvas_w, canvas_h) != (width, height):
                 logger.info("H3 canvas snapped %sx%s -> %sx%s", width, height, canvas_w, canvas_h)
             node_inputs["width"] = canvas_w
@@ -924,6 +1068,246 @@ async def generate_video(
     except Exception as e:
         logger.error("Video generation exception: %s", e)
         return None
+
+
+def _reinforce_ref2va_prompt(
+    prompt: str,
+    image_count: int,
+    video_count: int,
+    audio_count: int,
+) -> str:
+    labels = [f"<Picture {i + 1}>" for i in range(image_count)]
+    labels += [f"<Video {i + 1}>" for i in range(video_count)]
+    labels += [f"<Audio {i + 1}>" for i in range(audio_count)]
+    missing = [label for label in labels if label.lower() not in (prompt or "").lower()]
+    body = (prompt or "").strip()
+    if not missing:
+        return body
+    prefix = " ".join(missing)
+    return f"{prefix}\n{body}" if body else prefix
+
+
+async def generate_ref2va_video(
+    *,
+    prompt: str,
+    reference_image_uploads: list[str],
+    reference_video_uploads: list[str],
+    reference_audio_uploads: list[str],
+    reference_image_asset_ids: list[str],
+    reference_video_asset_ids: list[str],
+    reference_audio_asset_ids: list[str],
+    width: int,
+    height: int,
+    length: int,
+    aspect_ratio: str | None = None,
+    user_id: str,
+    quality: str = "480p",
+    seed: int | None = None,
+    output_last_frame: bool = False,
+    on_prompt_submitted=None,
+) -> dict:
+    """Run the provided MiniMax H3 Ref2VA workflow.
+
+    Returns ``{"video": bytes | None, "last_frame": bytes | None}``.
+    """
+    reference_image_uploads = reference_image_uploads or []
+    reference_video_uploads = reference_video_uploads or []
+    reference_audio_uploads = reference_audio_uploads or []
+    reference_image_asset_ids = reference_image_asset_ids or []
+    reference_video_asset_ids = reference_video_asset_ids or []
+    reference_audio_asset_ids = reference_audio_asset_ids or []
+
+    if len(reference_image_uploads) + len(reference_image_asset_ids) > 6:
+        raise ValueError("参考图最多支持 6 张")
+    if len(reference_video_uploads) + len(reference_video_asset_ids) > 2:
+        raise ValueError("参考视频最多支持 2 段")
+    if len(reference_audio_uploads) + len(reference_audio_asset_ids) > 3:
+        raise ValueError("参考音频最多支持 3 段")
+
+    config = WORKFLOW_CONFIGS["webui_video_ref"]
+    workflow_file = config["workflow_file"]
+    workflow_data = wm.load_workflow_data(workflow_file)
+    if not workflow_data:
+        logger.error("Cannot load %s workflow", workflow_file)
+        return {"video": None, "last_frame": None}
+
+    video_node_id = config["video_node_id"]
+    video_node = workflow_data.get(video_node_id)
+    if not video_node:
+        logger.error("Ref2VA video node %s not found", video_node_id)
+        return {"video": None, "last_frame": None}
+
+    # Resolve temporary uploads and asset-library files into local paths.
+    image_paths: list[Path] = []
+    video_paths: list[Path] = []
+    audio_paths: list[Path] = []
+    try:
+        for upload_id in reference_image_uploads:
+            image_paths.append(temp_media_store.get_path(upload_id, "image"))
+        for upload_id in reference_video_uploads:
+            video_paths.append(temp_media_store.get_path(upload_id, "video"))
+        for upload_id in reference_audio_uploads:
+            audio_paths.append(temp_media_store.get_path(upload_id, "audio"))
+        for asset_id in reference_image_asset_ids:
+            asset = asset_library.get_asset(user_id, asset_id)
+            if not asset:
+                raise PermissionError(f"参考图资产不存在：{asset_id}")
+            image_paths.append(asset_library.get_asset_path(user_id, asset_id))
+        for asset_id in reference_video_asset_ids:
+            asset = asset_library.get_asset(user_id, asset_id)
+            if not asset:
+                raise PermissionError(f"参考视频资产不存在：{asset_id}")
+            video_paths.append(asset_library.get_asset_path(user_id, asset_id))
+        for asset_id in reference_audio_asset_ids:
+            asset = asset_library.get_asset(user_id, asset_id)
+            if not asset:
+                raise PermissionError(f"参考音频资产不存在：{asset_id}")
+            audio_paths.append(asset_library.get_asset_path(user_id, asset_id))
+    except Exception:
+        raise
+
+    if not (image_paths or video_paths or audio_paths):
+        raise ValueError("Ref2VA 至少需要一个参考素材")
+
+    # Clean the workflow template's sample inputs and loaders.
+    for key in list(video_node["inputs"].keys()):
+        if key.startswith("ref_images.") or key.startswith("ref_videos.") or key.startswith("ref_audios."):
+            video_node["inputs"].pop(key, None)
+    for node_id, node_data in list(workflow_data.items()):
+        cls = node_data.get("class_type", "")
+        if cls in {"LoadImage", "VHS_LoadVideo", "LoadAudio"}:
+            workflow_data.pop(node_id, None)
+
+    workflow_data[config["prompt_node_id"]]["inputs"]["value"] = _reinforce_ref2va_prompt(
+        prompt,
+        len(image_paths),
+        len(video_paths),
+        len(audio_paths),
+    )
+    duration_node = workflow_data[config["duration_node_id"]]
+    duration_node["inputs"]["value"] = max(1.0, round(length / 24.0, 2))
+    fallback = (_snap_h3_dim(width), _snap_h3_dim(height))
+    resolution_node_id = config.get("resolution_selector_node_id")
+    resolution_node = workflow_data.get(resolution_node_id)
+    if resolution_node and aspect_ratio in VIDEO_ASPECT_RATIOS:
+        resolution_node["inputs"]["aspect_ratio"] = VIDEO_ASPECT_RATIO_LABELS[aspect_ratio]
+        resolution_node["inputs"]["megapixels"] = VIDEO_MEGAPIXELS.get(
+            quality, VIDEO_MEGAPIXELS["480p"]
+        )
+        resolution_node["inputs"]["multiple"] = 32
+        video_node["inputs"]["width"] = [resolution_node_id, 0]
+        video_node["inputs"]["height"] = [resolution_node_id, 1]
+    elif aspect_ratio in VIDEO_ASPECT_RATIOS:
+        ratio_w, ratio_h = VIDEO_ASPECT_RATIOS[aspect_ratio]
+        canvas_w, canvas_h = _canvas_from_ratio(ratio_w, ratio_h, quality)
+        video_node["inputs"]["width"] = canvas_w
+        video_node["inputs"]["height"] = canvas_h
+        if resolution_node_id in workflow_data:
+            workflow_data.pop(resolution_node_id, None)
+    elif image_paths:
+        # Legacy fallback only for requests that do not send aspect_ratio.
+        canvas_w, canvas_h = _canvas_from_image_path(image_paths[0], quality, fallback)
+        video_node["inputs"]["width"] = canvas_w
+        video_node["inputs"]["height"] = canvas_h
+    else:
+        video_node["inputs"]["width"] = fallback[0]
+        video_node["inputs"]["height"] = fallback[1]
+    video_node["inputs"]["ref_image_size"] = config.get("ref_image_size", "max")
+
+    steps_node = workflow_data.get(config["steps_node_id"])
+    if steps_node:
+        steps_node["inputs"]["steps"] = 8
+    accelerator_node = workflow_data.get(config["accelerator_lora_node_id"])
+    if accelerator_node:
+        accelerator_node["inputs"]["lora_name"] = (
+            "gif\\minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+        )
+
+    if not output_last_frame:
+        for node_id in (
+            config["last_frame_save_node_id"],
+            config["last_frame_parent_node_id"],
+            config["last_frame_components_node_id"],
+        ):
+            workflow_data.pop(node_id, None)
+
+    # Add the reference loaders.
+    next_id = 5000
+    try:
+        async with aiohttp.ClientSession() as session:
+            for index, path in enumerate(image_paths):
+                ctype = mimetypes.guess_type(str(path))[0] or "image/png"
+                filename = await _upload_media_file(session, path, ctype)
+                if not filename:
+                    return {"video": None, "last_frame": None}
+                node_id = str(next_id)
+                workflow_data[node_id] = {
+                    "inputs": {"image": filename},
+                    "class_type": "LoadImage",
+                    "_meta": {"title": f"Ref Image {index + 1}"},
+                }
+                video_node["inputs"][f"ref_images.ref_image_{index}"] = [node_id, 0]
+                next_id += 1
+
+            for index, path in enumerate(video_paths):
+                ctype = mimetypes.guess_type(str(path))[0] or "video/mp4"
+                filename = await _upload_media_file(session, path, ctype)
+                if not filename:
+                    return {"video": None, "last_frame": None}
+                node_id = str(next_id)
+                workflow_data[node_id] = {
+                    "inputs": {
+                        "video": filename,
+                        "force_rate": 0,
+                        "custom_width": 0,
+                        "custom_height": 0,
+                        "frame_load_cap": 0,
+                        "skip_first_frames": 0,
+                        "select_every_nth": 1,
+                        "format": "AnimateDiff",
+                    },
+                    "class_type": "VHS_LoadVideo",
+                    "_meta": {"title": f"Ref Video {index + 1}"},
+                }
+                video_node["inputs"][f"ref_videos.ref_video_{index}"] = [node_id, 0]
+                next_id += 1
+
+            for index, path in enumerate(audio_paths):
+                ctype = mimetypes.guess_type(str(path))[0] or "audio/wav"
+                filename = await _upload_media_file(session, path, ctype)
+                if not filename:
+                    return {"video": None, "last_frame": None}
+                node_id = str(next_id)
+                workflow_data[node_id] = {
+                    "inputs": {"audio": filename},
+                    "class_type": "LoadAudio",
+                    "_meta": {"title": f"Ref Audio {index + 1}"},
+                }
+                video_node["inputs"][f"ref_audios.ref_audio_{index}"] = [node_id, 0]
+                next_id += 1
+
+            actual_seed = seed if seed is not None else random.randint(1, 1000000000)
+            workflow_data[config["seed_node_id"]]["inputs"]["noise_seed"] = actual_seed
+            outputs = await _submit_and_wait_outputs(
+                session,
+                workflow_data,
+                str(uuid.uuid4()),
+                on_prompt_submitted,
+                prefer_ext="mp4,webm,mkv,mov",
+            )
+    finally:
+        # Temp uploads are intentionally retained for reuse; TTL cleanup runs
+        # in the WebUI cleanup loop rather than immediately after generation.
+        pass
+    video_bytes = None
+    last_frame_bytes = None
+    for info, data in outputs:
+        ext = Path(info["filename"]).suffix.lower().lstrip(".")
+        if ext in {"mp4", "webm", "mkv", "mov"} and video_bytes is None:
+            video_bytes = data
+        elif ext in {"png", "jpg", "jpeg", "webp"} and last_frame_bytes is None:
+            last_frame_bytes = data
+    return {"video": video_bytes, "last_frame": last_frame_bytes}
 
 
 def _inject_flux2_reference_chain(workflow_data: dict, config: dict, ref_image_filename: str) -> None:
@@ -999,6 +1383,24 @@ def _inject_flux2_reference_chain(workflow_data: dict, config: dict, ref_image_f
     logger.info("Flux2 reference chain injected: %s..%s", load_id, ref_neg_id)
 
 
+def _build_birefnet_cutout_node(image_src: list, config: dict) -> dict:
+    """BiRefNetRMBG node (Alpha output), mirroring the user's 抠图 workflows."""
+    return {
+        "inputs": {
+            "image": image_src,
+            "model": config["cutout_model"],
+            "mask_blur": 0,
+            "mask_offset": 0,
+            "invert_output": False,
+            "refine_foreground": False,
+            "background": "Alpha",
+            "background_color": "#222222",
+        },
+        "class_type": "BiRefNetRMBG",
+        "_meta": {"title": "BiRefNet 抠图"},
+    }
+
+
 async def generate_flux2_edit_image(
     prompt: str,
     source_image_b64: str,
@@ -1009,6 +1411,7 @@ async def generate_flux2_edit_image(
     steps: int | None = None,
     cfg: float | None = None,
     sampler_name: str | None = None,
+    mode: str = "edit",
     on_prompt_submitted=None,
 ) -> bytes | None:
     workflow_data = wm.load_workflow_data("discord_flux2_9b_edit")
@@ -1017,6 +1420,9 @@ async def generate_flux2_edit_image(
         return None
 
     config = WORKFLOW_CONFIGS["discord_flux2_9b_edit"]
+    cutout_id = config["cutout_node_id"]
+    load_id = config["load_image_node_id"]
+    save_id = config["save_node_id"]
 
     client_id = str(uuid.uuid4())
     try:
@@ -1026,31 +1432,59 @@ async def generate_flux2_edit_image(
             if not source_filename:
                 logger.error("Failed to upload source image")
                 return None
-            workflow_data[config["load_image_node_id"]]["inputs"]["image"] = source_filename
+            workflow_data[load_id]["inputs"]["image"] = source_filename
 
-            # Upload and inject reference image (optional)
-            if reference_image_b64:
-                ref_filename = await _upload_image(session, reference_image_b64)
-                if not ref_filename:
-                    logger.error("Failed to upload reference image")
-                    return None
-                _inject_flux2_reference_chain(workflow_data, config, ref_filename)
+            if mode == "cutout":
+                # Direct cutout: skip the Flux2 edit entirely - build a minimal
+                # graph (LoadImage -> BiRefNetRMBG -> SaveImage).
+                minimal = {
+                    load_id: {
+                        "inputs": {"image": source_filename},
+                        "class_type": "LoadImage",
+                        "_meta": {"title": "Source Image"},
+                    },
+                    cutout_id: _build_birefnet_cutout_node([load_id, 0], config),
+                    save_id: {
+                        "inputs": {
+                            "filename_prefix": config["cutout_direct_save_prefix"],
+                            "images": [cutout_id, 0],
+                        },
+                        "class_type": "SaveImage",
+                        "_meta": {"title": "Save Cutout"},
+                    },
+                }
+                workflow_data = minimal
+            else:
+                # Standard Flux2 edit; optionally chain cutout after decode.
+                if reference_image_b64:
+                    ref_filename = await _upload_image(session, reference_image_b64)
+                    if not ref_filename:
+                        logger.error("Failed to upload reference image")
+                        return None
+                    _inject_flux2_reference_chain(workflow_data, config, ref_filename)
 
-            # Set prompts
-            workflow_data[config["pos_node_id"]]["inputs"]["text"] = prompt
-            neg_text = negative_prompt or ""
-            workflow_data[config["neg_node_id"]]["inputs"]["text"] = neg_text
+                workflow_data[config["pos_node_id"]]["inputs"]["text"] = prompt
+                neg_text = negative_prompt or ""
+                workflow_data[config["neg_node_id"]]["inputs"]["text"] = neg_text
 
-            # Set sampling parameters
-            actual_seed = seed if seed is not None else random.randint(1, 1000000000)
-            workflow_data[config["noise_node_id"]]["inputs"]["noise_seed"] = actual_seed
+                actual_seed = seed if seed is not None else random.randint(1, 1000000000)
+                workflow_data[config["noise_node_id"]]["inputs"]["noise_seed"] = actual_seed
 
-            if steps is not None:
-                workflow_data[config["scheduler_node_id"]]["inputs"]["steps"] = steps
-            if cfg is not None:
-                workflow_data[config["guider_node_id"]]["inputs"]["cfg"] = cfg
-            if sampler_name:
-                workflow_data[config["sampler_select_node_id"]]["inputs"]["sampler_name"] = sampler_name
+                if steps is not None:
+                    workflow_data[config["scheduler_node_id"]]["inputs"]["steps"] = steps
+                if cfg is not None:
+                    workflow_data[config["guider_node_id"]]["inputs"]["cfg"] = cfg
+                if sampler_name:
+                    workflow_data[config["sampler_select_node_id"]]["inputs"]["sampler_name"] = sampler_name
+
+                if mode == "edit_cutout":
+                    workflow_data[cutout_id] = _build_birefnet_cutout_node(
+                        [config["decode_node_id"], 0], config
+                    )
+                    workflow_data[save_id]["inputs"]["images"] = [cutout_id, 0]
+                    workflow_data[save_id]["inputs"]["filename_prefix"] = (
+                        config["cutout_edit_save_prefix"]
+                    )
 
             return await _submit_and_wait(session, workflow_data, client_id, on_prompt_submitted)
     except Exception as e:

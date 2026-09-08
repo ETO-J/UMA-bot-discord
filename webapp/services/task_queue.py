@@ -4,7 +4,9 @@ import time
 import sqlite3
 import threading
 import logging
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from config import DB_PATH, TASK_IMAGE_DIR
 
@@ -13,7 +15,8 @@ logger = logging.getLogger(__name__)
 _TASK_COLUMNS = (
     "task_id, status, created_at, prompt, workflow, prompt1, prompt2, "
     "global_prompt, user_id, image_filename, error, seed, "
-    "sampler_name, scheduler, steps, cfg, output_type"
+    "sampler_name, scheduler, steps, cfg, output_type, "
+    "video_mode, reference_json, params_json"
 )
 _LOAD_LIMIT = 500
 
@@ -31,6 +34,8 @@ class Task:
     user_id: str = "local_user"
     image_bytes: bytes | None = None
     image_filename: str | None = None
+    last_frame_bytes: bytes | None = None
+    last_frame_filename: str | None = None
     error: str | None = None
     seed: int | None = None
     sampler_name: str | None = None
@@ -38,7 +43,20 @@ class Task:
     steps: int | None = None
     cfg: float | None = None
     output_type: str = "image"
+    video_mode: str = "fl2va"
+    reference_ids: dict = field(default_factory=dict)
+    params: dict = field(default_factory=dict)
     comfyui_prompt_id: str | None = None
+
+    @property
+    def has_last_frame(self) -> bool:
+        return bool(
+            self.last_frame_bytes
+            or (
+                self.last_frame_filename
+                and (TASK_IMAGE_DIR / self.last_frame_filename).exists()
+            )
+        )
 
 
 class TaskQueue:
@@ -77,7 +95,10 @@ class TaskQueue:
                     scheduler TEXT,
                     steps INTEGER,
                     cfg REAL,
-                    output_type TEXT DEFAULT 'image'
+                    output_type TEXT DEFAULT 'image',
+                    video_mode TEXT DEFAULT 'fl2va',
+                    reference_json TEXT DEFAULT '{}',
+                    params_json TEXT DEFAULT '{}'
                 )
             """)
             cursor.execute("""
@@ -90,8 +111,15 @@ class TaskQueue:
             """)
             cursor.execute("PRAGMA table_info(tasks)")
             existing_cols = [col[1] for col in cursor.fetchall()]
-            if "output_type" not in existing_cols:
-                cursor.execute("ALTER TABLE tasks ADD COLUMN output_type TEXT DEFAULT 'image'")
+            task_migrations = {
+                "output_type": "TEXT DEFAULT 'image'",
+                "video_mode": "TEXT DEFAULT 'fl2va'",
+                "reference_json": "TEXT DEFAULT '{}'",
+                "params_json": "TEXT DEFAULT '{}'",
+            }
+            for column, definition in task_migrations.items():
+                if column not in existing_cols:
+                    cursor.execute(f"ALTER TABLE tasks ADD COLUMN {column} {definition}")
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, created_at DESC)"
             )
@@ -131,6 +159,18 @@ class TaskQueue:
             return [(row[0], row[1]) for row in cursor.fetchall()]
 
     @staticmethod
+    def _json_value(value) -> dict:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        try:
+            parsed = json.loads(value or "{}")
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    @staticmethod
     def _row_to_task(row) -> Task:
         return Task(
             task_id=row["task_id"],
@@ -150,6 +190,14 @@ class TaskQueue:
             steps=row["steps"],
             cfg=row["cfg"],
             output_type=row["output_type"] or "image",
+            video_mode=row["video_mode"] or "fl2va",
+            reference_ids=TaskQueue._json_value(row["reference_json"]),
+            params=TaskQueue._json_value(row["params_json"]),
+            last_frame_filename=(
+                f"{row['task_id']}.last.png"
+                if (TASK_IMAGE_DIR / f"{row['task_id']}.last.png").exists()
+                else None
+            ),
         )
 
     def _persist_task(self, task: Task):
@@ -157,13 +205,16 @@ class TaskQueue:
             cursor = self._conn.cursor()
             cursor.execute(
                 f"INSERT OR REPLACE INTO tasks ({_TASK_COLUMNS}) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task.task_id, task.status, task.created_at, task.prompt,
                     task.workflow, task.prompt1, task.prompt2, task.global_prompt,
                     task.user_id, task.image_filename, task.error, task.seed,
                     task.sampler_name, task.scheduler, task.steps, task.cfg,
                     task.output_type,
+                    task.video_mode,
+                    json.dumps(task.reference_ids or {}, ensure_ascii=False),
+                    json.dumps(task.params or {}, ensure_ascii=False),
                 ),
             )
             self._conn.commit()
@@ -209,6 +260,41 @@ class TaskQueue:
                 await asyncio.to_thread(path.unlink)
             except Exception as e:
                 logger.warning("Failed to delete task image %s: %s", task_id, e)
+
+    def _saved_last_frame_path(self, task_id: str) -> Path:
+        return TASK_IMAGE_DIR / f"{task_id}.last.png"
+
+    async def _save_last_frame_to_disk(self, task: Task) -> None:
+        if not task.last_frame_bytes:
+            return
+        path = self._saved_last_frame_path(task.task_id)
+        try:
+            await asyncio.to_thread(path.write_bytes, task.last_frame_bytes)
+            task.last_frame_filename = path.name
+        except Exception as e:
+            logger.error("Failed to persist task last frame %s: %s", task.task_id, e)
+
+    async def get_saved_last_frame_path(self, task_id: str) -> Path | None:
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if task and task.status == "completed" and task.last_frame_filename:
+                p = TASK_IMAGE_DIR / task.last_frame_filename
+                return p if p.exists() else None
+        p = self._saved_last_frame_path(task_id)
+        return p if p.exists() else None
+
+    async def get_last_frame_bytes(self, task_id: str) -> bytes | None:
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if task and task.status == "completed" and task.last_frame_bytes:
+                return task.last_frame_bytes
+        path = self._saved_last_frame_path(task_id)
+        if path.exists():
+            try:
+                return await asyncio.to_thread(path.read_bytes)
+            except Exception as e:
+                logger.warning("Failed to read task last frame %s: %s", task_id, e)
+        return None
 
     async def get_saved_file_path(self, task_id: str) -> Path | None:
         """Return the on-disk file path for a completed task, or None."""
@@ -264,6 +350,9 @@ class TaskQueue:
         steps: int | None = None,
         cfg: float | None = None,
         output_type: str = "image",
+        video_mode: str = "fl2va",
+        reference_ids: dict | None = None,
+        params: dict | None = None,
     ) -> Task:
         task = Task(
             task_id=str(uuid.uuid4())[:8],
@@ -281,6 +370,9 @@ class TaskQueue:
             steps=steps,
             cfg=cfg,
             output_type=output_type,
+            video_mode=video_mode,
+            reference_ids=reference_ids or {},
+            params=params or {},
         )
         async with self._lock:
             self._tasks[task.task_id] = task
@@ -308,6 +400,9 @@ class TaskQueue:
     async def update_task(self, task_id: str, **kwargs):
         save_path = None
         save_bytes = None
+        save_last_frame_path = None
+        save_last_frame_bytes = None
+        task = None
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -329,12 +424,21 @@ class TaskQueue:
                 save_path = self._saved_path(task.task_id, self._file_ext(task))
                 save_bytes = task.image_bytes
                 task.image_filename = save_path.name
+            if new_status == "completed" and task.last_frame_bytes:
+                save_last_frame_path = self._saved_last_frame_path(task.task_id)
+                save_last_frame_bytes = task.last_frame_bytes
+                task.last_frame_filename = save_last_frame_path.name
             self._persist_task(task)
         if save_path is not None and save_bytes is not None:
             try:
                 await asyncio.to_thread(save_path.write_bytes, save_bytes)
             except Exception as e:
                 logger.error("Failed to persist task image %s: %s", task_id, e)
+        if save_last_frame_path is not None and save_last_frame_bytes is not None:
+            try:
+                await asyncio.to_thread(save_last_frame_path.write_bytes, save_last_frame_bytes)
+            except Exception as e:
+                logger.error("Failed to persist task last frame %s: %s", task_id, e)
 
     async def get_image_bytes(self, task_id: str) -> bytes | None:
         ext = ".png"
@@ -360,6 +464,7 @@ class TaskQueue:
         for tid, ext in to_remove:
             self._delete_from_db(tid)
             await self._delete_image_from_disk(tid, ext)
+            await self._delete_image_from_disk(tid, ".last.png")
         if to_remove:
             logger.info("Cleaned up %d old tasks", len(to_remove))
 

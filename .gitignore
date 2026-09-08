@@ -162,6 +162,8 @@ data/knowledge_db/*.faiss
 data/knowledge_db/*.pkl
 data/knowledge_db/.version
 data/comfyuisetting/
+data/assets/
+data/video_uploads/
 data/model_cache/
 data/grabbing_data/
 

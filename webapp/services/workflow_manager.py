@@ -44,7 +44,7 @@ class WorkflowManager:
                         width INTEGER DEFAULT 832,
                         height INTEGER DEFAULT 1216,
                         active_loras TEXT DEFAULT '{}',
-                        workflow TEXT DEFAULT 'discord_anima_v2',
+                        workflow TEXT DEFAULT 'discord_anima_fast',
                         negative_prompt TEXT DEFAULT 'mosaic,low quality, bad quality, worst quality'
                     )
                 """)
@@ -71,7 +71,11 @@ class WorkflowManager:
                         cursor.execute("UPDATE user_settings SET part1=? WHERE user_id=?", ("[832,608,0,0]", uid))
                     if not p2 or p2 == "[]":
                         cursor.execute("UPDATE user_settings SET part2=? WHERE user_id=?", ("[832,608,832,0]", uid))
-                cursor.execute("UPDATE user_settings SET workflow='discord_anima_v2' WHERE workflow='uma'")
+                cursor.execute("UPDATE user_settings SET workflow='discord_anima_fast' WHERE workflow='uma'")
+                cursor.execute(
+                    "UPDATE user_settings SET workflow='discord_anima_fast' "
+                    "WHERE workflow IN ('discord_anima_v2','discord_anima','discord_anima_new')"
+                )
                 self._conn.commit()
             logger.info("DB init/upgrade success: %s", DB_PATH)
         except Exception as e:
@@ -116,7 +120,7 @@ class WorkflowManager:
                 return self._row_to_settings(row)
             else:
                 cursor.execute(
-                    "INSERT INTO user_settings (user_id, last_reset_date, workflow) VALUES (?, ?, 'discord_anima_v2')",
+                    "INSERT INTO user_settings (user_id, last_reset_date, workflow) VALUES (?, ?, 'discord_anima_fast')",
                     (user_id, today_str),
                 )
                 self._conn.commit()
@@ -243,7 +247,7 @@ class WorkflowManager:
             return None
 
     def _get_lora_dirs(self, workflow: str = None) -> list:
-        if workflow == "webui_video":
+        if workflow in {"webui_video", "webui_video_ref"}:
             return LORA_VIDEO_DIRS
         if workflow and ("anima" in workflow or workflow in ANIMA_WORKFLOWS):
             return LORA_ANIMA_DIRS
@@ -272,7 +276,7 @@ class WorkflowManager:
         with self._lock:
             settings = self.get_user_settings(user_id)
             if workflow is None:
-                workflow = settings.get("workflow", "discord_anima_v2")
+                workflow = settings.get("workflow", "discord_anima_fast")
             current_loras = settings["active_loras"]
             real_path = self.find_lora_path(lora_name, workflow)
             if real_path:

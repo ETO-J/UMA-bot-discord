@@ -1,11 +1,18 @@
 import asyncio
+import math
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import Response, FileResponse
 
 from schemas.requests import DrawRequest, DiffDrawRequest, MultidrawRequest, VideoRequest, Flux2EditRequest, TaskResponse
 from services.workflow_manager import wm
-from services.generator import generate_image, generate_multidraw_image, generate_video, generate_flux2_edit_image
+from services.generator import (
+    generate_image,
+    generate_multidraw_image,
+    generate_video,
+    generate_ref2va_video,
+    generate_flux2_edit_image,
+)
 from services.task_queue import task_queue
 from dependencies import get_current_user_id
 from config import (
@@ -14,12 +21,13 @@ from config import (
     VIDEO_LONG_DURATION_START,
     VIDEO_LONG_DURATION_MULT,
     VIDEO_FPS,
+    REF2VA_COST_MULTIPLIER,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["draw"])
 
-DEFAULT_WORKFLOW = "discord_anima_v2"
+DEFAULT_WORKFLOW = "discord_anima_fast"
 DIFF_WORKFLOW = "discord_差分"
 HD_COST = 10
 
@@ -235,7 +243,12 @@ def _video_cost(quality: str, duration: int) -> int:
 
 @router.post("/video/async", response_model=TaskResponse)
 async def video_async(req: VideoRequest, user_id: str = Depends(get_current_user_id)):
-    cost = _video_cost(req.quality, req.duration)
+    base_cost = _video_cost(req.quality, req.duration)
+    cost = (
+        math.ceil(base_cost * REF2VA_COST_MULTIPLIER)
+        if req.video_mode == "ref2va"
+        else base_cost
+    )
     user_settings = wm.get_user_settings(user_id)
     remaining = user_settings["limit_count"] - user_settings["used_today"]
     if remaining < cost:
@@ -247,9 +260,29 @@ async def video_async(req: VideoRequest, user_id: str = Depends(get_current_user
     width, height = res_set.get(req.orientation, res_set["portrait"])
     length = req.duration * VIDEO_FPS + 1
 
+    reference_ids = {
+        "image_uploads": req.reference_image_uploads or [],
+        "video_uploads": req.reference_video_uploads or [],
+        "audio_uploads": req.reference_audio_uploads or [],
+        "image_assets": req.reference_image_asset_ids or [],
+        "video_assets": req.reference_video_asset_ids or [],
+        "audio_assets": req.reference_audio_asset_ids or [],
+    }
     task = await task_queue.create_task(
         user_id=user_id, prompt=req.prompt,
         seed=req.seed, output_type="video",
+        workflow="webui_video_ref" if req.video_mode == "ref2va" else "webui_video",
+        video_mode=req.video_mode,
+        reference_ids=reference_ids,
+        params={
+            "quality": req.quality,
+            "duration": req.duration,
+            "orientation": req.orientation,
+            "aspect_ratio": req.aspect_ratio,
+            "output_last_frame": req.output_last_frame,
+            "start_image": bool(req.start_image),
+            "end_image": bool(req.end_image),
+        },
     )
 
     async def process():
@@ -257,17 +290,62 @@ async def video_async(req: VideoRequest, user_id: str = Depends(get_current_user
         async def _on_submit(pid: str):
             await task_queue.update_task(task.task_id, comfyui_prompt_id=pid)
         try:
-            result = await generate_video(
-                prompt=req.prompt,
-                start_image_b64=req.start_image,
-                end_image_b64=req.end_image,
-                width=width, height=height, length=length,
-                user_id=user_id,
-                seed=req.seed,
-                on_prompt_submitted=_on_submit,
-            )
-            if result:
-                await task_queue.update_task(task.task_id, status="completed", image_bytes=result)
+            if req.video_mode == "fl2va":
+                if not req.start_image:
+                    raise ValueError("FL2VA 模式必须提供首帧")
+                result = await generate_video(
+                    prompt=req.prompt,
+                    start_image_b64=req.start_image,
+                    end_image_b64=req.end_image,
+                    width=width, height=height, length=length,
+                    quality=req.quality,
+                    user_id=user_id,
+                    seed=req.seed,
+                    on_prompt_submitted=_on_submit,
+                )
+                video_bytes = result
+                last_frame_bytes = None
+            else:
+                reference_image_uploads = req.reference_image_uploads or []
+                reference_video_uploads = req.reference_video_uploads or []
+                reference_audio_uploads = req.reference_audio_uploads or []
+                if not (
+                    reference_image_uploads
+                    or reference_video_uploads
+                    or reference_audio_uploads
+                    or req.reference_image_asset_ids
+                    or req.reference_video_asset_ids
+                    or req.reference_audio_asset_ids
+                ):
+                    raise ValueError("Ref2VA 至少需要一个参考素材")
+                ref_result = await generate_ref2va_video(
+                    prompt=req.prompt,
+                    reference_image_uploads=reference_image_uploads,
+                    reference_video_uploads=reference_video_uploads,
+                    reference_audio_uploads=reference_audio_uploads,
+                    reference_image_asset_ids=req.reference_image_asset_ids or [],
+                    reference_video_asset_ids=req.reference_video_asset_ids or [],
+                    reference_audio_asset_ids=req.reference_audio_asset_ids or [],
+                    width=width,
+                    height=height,
+                    quality=req.quality,
+                    aspect_ratio=req.aspect_ratio,
+                    length=length,
+                    user_id=user_id,
+                    seed=req.seed,
+                    output_last_frame=req.output_last_frame,
+                    on_prompt_submitted=_on_submit,
+                )
+                video_bytes = ref_result.get("video")
+                last_frame_bytes = ref_result.get("last_frame")
+
+            if video_bytes:
+                await task_queue.update_task(
+                    task.task_id,
+                    status="completed",
+                    image_bytes=video_bytes,
+                    last_frame_bytes=last_frame_bytes,
+                )
             else:
                 wm.refund_quota(user_id, cost)
                 await task_queue.update_task(task.task_id, status="failed", error="Video generation returned no data")
@@ -280,11 +358,21 @@ async def video_async(req: VideoRequest, user_id: str = Depends(get_current_user
 
 
 FLUX2_EDIT_COST = 20
+FLUX2_EDIT_CUTOUT_COST = 20
+FLUX2_CUTOUT_COST = 1
+
+
+def _flux2_cost(mode: str) -> int:
+    if mode == "cutout":
+        return FLUX2_CUTOUT_COST
+    if mode == "edit_cutout":
+        return FLUX2_EDIT_CUTOUT_COST
+    return FLUX2_EDIT_COST
 
 
 @router.post("/flux2_edit/async", response_model=TaskResponse)
 async def flux2_edit_async(req: Flux2EditRequest, user_id: str = Depends(get_current_user_id)):
-    cost = FLUX2_EDIT_COST
+    cost = _flux2_cost(req.mode)
     user_settings = wm.get_user_settings(user_id)
     remaining = user_settings["limit_count"] - user_settings["used_today"]
     if remaining < cost:
@@ -313,6 +401,7 @@ async def flux2_edit_async(req: Flux2EditRequest, user_id: str = Depends(get_cur
                 steps=req.steps,
                 cfg=req.cfg,
                 sampler_name=req.sampler_name,
+                mode=req.mode,
                 on_prompt_submitted=_on_submit,
             )
             if result:
@@ -343,6 +432,10 @@ def _task_to_response(t) -> TaskResponse:
         seed=t.seed, sampler_name=t.sampler_name,
         scheduler=t.scheduler, steps=t.steps, cfg=t.cfg,
         output_type=t.output_type,
+        has_last_frame=t.has_last_frame,
+        video_mode=t.video_mode,
+        reference_ids=t.reference_ids,
+        params=t.params,
     )
 
 
@@ -386,6 +479,17 @@ async def get_task_video(task_id: str):
     if video_bytes is None:
         raise HTTPException(status_code=404, detail="Video not ready or task not found")
     return Response(content=video_bytes, media_type="video/mp4")
+
+
+@router.get("/task/{task_id}/last-frame")
+async def get_task_last_frame(task_id: str):
+    path = await task_queue.get_saved_last_frame_path(task_id)
+    if path is not None:
+        return FileResponse(path, media_type="image/png")
+    last_frame_bytes = await task_queue.get_last_frame_bytes(task_id)
+    if last_frame_bytes is None:
+        raise HTTPException(status_code=404, detail="尾帧不存在或任务未完成")
+    return Response(content=last_frame_bytes, media_type="image/png")
 
 
 @router.get("/tasks", response_model=list[TaskResponse])
