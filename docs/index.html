@@ -115,10 +115,12 @@
   <section>
     <h2>Data &amp; safety</h2>
     <p style="color:var(--dim);font-size:14.5px">
-      The bot is invite-only and reads messages only in servers where its operator has installed it,
-      and only in the enabled channels. Data is stored on the operator's own private server, never
-      sold, and never used to train models. Conversation memory can be cleared with
-      <code>/清除</code>. See the <a href="privacy.html">Privacy Policy</a> and
+      The bot is invite-only and reads messages only in servers where its operator installed it.
+      Chat, moderation and auto-translation run only in channels configured by the operator
+      (server members cannot change that scope); an operational log of incoming messages is kept
+      on the operator's own server for diagnostics. Data is never sold and never used to train
+      models. Note that <code>/清除</code> starts a fresh session but does not delete stored
+      session logs. See the <a href="privacy.html">Privacy Policy</a> and
       <a href="terms.html">Terms of Service</a>.
     </p>
   </section>

@@ -143,9 +143,11 @@ How to test the bot
 - 2) Send "/帮助" — the bot lists its commands.
 - 3) @mention the bot in any channel — it replies.
 - 4) Send an image with "/识图" — it returns image-source results.
-- 5) (Optional) Put the bot in a channel configured as a moderation "trap channel" and post
-  a message — the bot demonstrates the moderation action.
+- 5) (Optional) Put the bot in a channel configured by the operator as a moderation
+  "trap channel" and post a message — the bot demonstrates the moderation action.
 - Commands work with or without the leading slash.
+- Note: free-chat replies and scheduled greetings are operator toggles; @-mentions and all
+  commands work regardless of those toggles.
 ```
 
 **邀请链接生成**：Developer Portal → **OAuth2 → URL Generator**，Scopes 勾 `bot` +
@@ -161,7 +163,7 @@ How to test the bot
 | 1 | 频道内发送「波旁 你好」→ 机器人回复 | 读取普通消息文本 + 命令解析 |
 | 2 | 开启自由聊天的频道中机器人自然加入对话（或 @机器人 回复） | 自由对话需读消息文本 |
 | 3 | 「/帮助」输出 | 命令系统整体 |
-| 4 | 自动翻译频道中对一条消息回复多语言译文 | 审核/翻译频道读全量消息 |
+| 4 | 自动翻译频道中对一条消息回复多语言译文 | 自动翻译需逐条读取消息文本 |
 | 5 | （可选）陷阱频道处理垃圾消息的提示/日志 | 审核副作用说明 |
 
 截图请**真实**、与表单文字一致；审核会核对权限与实际行为是否相符。
@@ -172,8 +174,8 @@ How to test the bot
 
 1. **公开仓库 README 与线上机器人不一致**：`UMA-bot-discord` 仓库 README 仍描述旧的
    NoneBot2 版本（含机器人 `draw` 命令），线上机器人已是 dsh 版且**不做** Discord 绘图。
-   建议在 README 顶部加一行指向 `docs/` 的说明，或用 bpdsh 的 README 更新仓库介绍——
-   审核人员查到仓库时，材料需与机器人行为一致。
+   已在 README 顶部加"仓库状态"说明，并把 `docs/` 验证材料更新为当前架构；审核人员查到仓库时，
+   材料需与机器人行为一致。
 2. **bpdsh 仓库尚未上传到 GitHub**（无 remote）。若要把源码公开供审核参考，可新建仓库
    推送 bpdsh；不公开也不影响验证，但"网页/隐私政策/条款"必须公开可访问。
 3. **DeepSeek 数据设置**：提交前在 DeepSeek 开放平台确认 API 数据不被用于训练，保证
@@ -181,6 +183,13 @@ How to test the bot
 4. **机器人邀请必须人工完成**：invite-only 机器人无法被审核人员自行加入，务必提供测试服务器
    与邀请链接/说明。
 5. **每年重审**：Intent 批准一年后需重新提交表单；到期前会有通知。
+6. **论证口径（已按代码审计修正）**：陷阱频道审核**不读**消息文本（只对诱饵频道内的发言做
+   封禁/清屏），**不要**把它写进"为什么需要 Message Content"；真正需要文本的是纯文本命令、
+   自由对话（运营者开启时）、自动翻译频道与入站活动日志。频道范围由**运营者**全局配置，
+   服务器成员无法自行开关。
+7. **`/清除` 不是删除**：它只是让之后的消息进入新会话记录，不删除磁盘文件，且重启后可能恢复
+   旧会话；若用户要求删除隐私数据，需运营者手动删除存储文件。隐私政策已如实说明这一点。
+
 
 ---
 
