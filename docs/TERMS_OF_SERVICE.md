@@ -54,7 +54,7 @@ guarantee uninterrupted or error-free service.
 
 ## 6. Privacy
 
-Data handling is described in the Privacy Policy at [PRIVACY_POLICY.html](PRIVACY_POLICY.html)
+Data handling is described in the Privacy Policy at [privacy.html](privacy.html)
 (or the markdown source in this repository). By using the App you agree to that policy.
 
 ## 7. Termination

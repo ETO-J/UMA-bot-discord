@@ -46,8 +46,8 @@
    - 保存，等待 1–2 分钟构建完成。
 3. 验证以下 URL 都能在无登录状态下打开（这是回复审核时必须能点开的链接）：
    - 落地页：`https://eto-j.github.io/UMA-bot-discord/`
-   - 隐私政策：`https://eto-j.github.io/UMA-bot-discord/PRIVACY_POLICY.html`
-   - 服务条款：`https://eto-j.github.io/UMA-bot-discord/TERMS_OF_SERVICE.html`
+   - 隐私政策：`https://eto-j.github.io/UMA-bot-discord/privacy.html`
+   - 服务条款：`https://eto-j.github.io/UMA-bot-discord/terms.html`
 
 > 如果 GitHub Pages 不可用，备选：用 gist.github.com 发布同样的 HTML/Markdown 并取 Raw 链接；
 > 或把 `docs/` 里的 HTML 拷到 `webapp/static/` 由 nginx 提供（需要改站点配置，不推荐）。
@@ -80,8 +80,8 @@ login.
 | 字段 | 填什么 |
 |---|---|
 | **Website** | `https://eto-j.github.io/UMA-bot-discord/` （备选 `https://bourbon-draw.cn`） |
-| **Privacy Policy URL** | `https://eto-j.github.io/UMA-bot-discord/PRIVACY_POLICY.html` |
-| **Terms of Service URL** | `https://eto-j.github.io/UMA-bot-discord/TERMS_OF_SERVICE.html` |
+| **Privacy Policy URL** | `https://eto-j.github.io/UMA-bot-discord/privacy.html` |
+| **Terms of Service URL** | `https://eto-j.github.io/UMA-bot-discord/terms.html` |
 
 > 若之后迁移到自己的域名（如 bourbon-draw.cn/legal/privacy），只需更新这三个链接并保证页面存在。
 

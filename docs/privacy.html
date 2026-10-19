@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Bourbon (美浦波旁)</title>
+<style>
+:root{--bg:#0f1220;--card:#171a2e;--ink:#e8ecff;--dim:#a3aacb;--accent:#7c8cff;--line:#262a44}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif}
+main{max-width:860px;margin:0 auto;padding:44px 22px 70px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.crumb{font-size:13.5px;color:var(--dim);margin-bottom:26px}
+h1{font-size:26px;border-bottom:1px solid var(--line);padding-bottom:10px;margin-top:0}
+h2{font-size:19px;margin-top:34px;padding-top:16px;border-top:1px solid var(--line)}
+h3{font-size:16.5px}
+code{background:#20243d;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:14px}
+pre{background:#20243d;border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto}
+pre code{background:none;border:0;padding:0}
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:14px 0}
+td,th{border:1px solid var(--line);padding:7px 9px;vertical-align:top}
+th{background:#1c2038}
+hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+blockquote{border-left:3px solid var(--accent);margin:14px 0;padding:6px 14px;background:#1a1e36;border-radius:0 10px 10px 0;color:var(--dim)}
+footer{margin-top:40px;color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+<main>
+<div class="crumb"><a href="index.html">&larr; Bourbon (美浦波旁) home</a></div>
+<h1>Privacy Policy — Bourbon (美浦波旁) Discord Application</h1>
+<p><em>Last updated: 2026-10-19</em></p>
+<p>This Privacy Policy explains how the Discord application <strong>Bourbon (美浦波旁)</strong> (&quot;the App&quot;,
+&quot;we&quot;, &quot;us&quot;) handles data when you interact with it on Discord or use its web drawing
+interface at <strong>bourbon-draw.cn</strong>. The App is operated by its individual developer/operator
+(&quot;the Operator&quot;).</p>
+<p>By using the App you agree to the practices described below.</p>
+<hr>
+<h2>1. What is the App?</h2>
+<p>The App is a multi-function AI companion bot for Discord (invite-only; it runs only on the
+servers its Operator has chosen) plus an optional browser-based AI image/video drawing
+interface at bourbon-draw.cn. The same Discord application powers both; the web interface
+uses Discord OAuth2 login with the <strong>identify</strong> scope only.</p>
+<h2>2. What data does the App process?</h2>
+<p><strong>2.1 Discord bot</strong></p>
+<ul>
+<li><strong>Discord identifiers</strong>: your user ID, display name/username, avatar, and the IDs of
+servers and channels in which the App operates.</li>
+<li><strong>Message content</strong>: the text of messages the App can see in the servers/channels where it
+is enabled. This includes plain-text commands (e.g. <code>/波旁 …</code>, <code>/帮助</code>, <code>/学习 …</code>,
+<code>/人设列表</code>, <code>/切换人设 …</code>, <code>/今日担当</code>, <code>/识图</code>, <code>/涩图</code>, and the administrator commands
+<code>/撤回</code>, <code>/长期撤回</code>, <code>/ban</code>, <code>/抓取</code>, <code>/debug</code>, <code>/广播</code>, <code>/清除</code>, <code>/重启</code>), ordinary
+conversation in channels where the App's chat or moderation features are enabled, and
+moderation/auto-translation channels configured by the server administrator. On Discord the
+leading <code>/</code> is optional.</li>
+<li><strong>Images and attachments</strong>: images you send to the App for understanding, image-source
+lookup (<code>/识图</code>), or images the App sends to you (e.g. <code>/涩图</code>, <code>/今日担当</code>).</li>
+<li><strong>Conversation memory and logs</strong>: recent conversation turns per channel/user session, and
+operational logs (inbound messages, feature decisions, tool calls, outbound messages) kept
+by the Operator for the bot's proper functioning and troubleshooting.</li>
+<li><strong>Knowledge entries</strong>: facts users/admins teach with <code>/学习</code> (and admins with
+<code>/批量学习</code>), stored in the App's knowledge base.</li>
+</ul>
+<p><strong>2.2 Web drawing interface (bourbon-draw.cn)</strong></p>
+<ul>
+<li><strong>Discord account data</strong> after OAuth2 login with the identify scope: user ID, username,
+avatar. A signed session token is stored in your browser (valid for 7 days).</li>
+<li><strong>Content you create</strong>: prompts, negative prompts, workflow/settings choices, uploaded
+source images or media, generated images/videos, per-user generation quotas and, where
+enabled, your media library/asset uploads.</li>
+<li><strong>Published media</strong>: when the asset-publish feature is enabled, the thumbnail/attachment
+of a published work may be posted to a configured Discord channel by the Operator's bot.</li>
+</ul>
+<h2>3. Why is this data processed?</h2>
+<ul>
+<li><strong>Conversational AI</strong>: answering questions and keeping coherent context; deciding whether
+to take part in free-form channel conversation; image understanding.</li>
+<li><strong>Knowledge base</strong>: grounding answers in server-specific facts taught to the App.</li>
+<li><strong>Commands and utilities</strong>: persona switching, image-source lookup, Pixiv image lookup,
+daily random character image, scheduled greetings, help.</li>
+<li><strong>Moderation and safety</strong>: trap-channel spam detection, user blacklists, message removal
+and ban commands used by administrators.</li>
+<li><strong>Administration</strong>: channel-history archiving (<code>/抓取</code>), restart/clear/debug commands.</li>
+<li><strong>Web drawing</strong>: signing you in, remembering your settings/quotas, generating media and
+keeping your generation history/assets.</li>
+</ul>
+<h2>4. Where is the data stored and retained?</h2>
+<ul>
+<li>Everything the bot stores is stored <strong>locally on the Operator's own private server/</strong>
+machine — conversation sessions (DeepSeek Harness session store), the knowledge base
+(FAISS index and text files), activity/console/sidecar logs, and archives produced by the
+administrator-only <code>/抓取</code> command. Nothing in this list is hosted by a third party on the
+Operator's behalf.</li>
+<li>Conversation sessions are retained to provide memory. Server administrators can clear a
+session with <code>/清除</code>, which starts a fresh session generation; the previous local session
+log remains on the Operator's disk until the Operator removes it, but it is no longer used
+as active memory. Knowledge entries can be removed with <code>/删除知识</code>. Users may contact the
+Operator (section 9) to request deletion.</li>
+<li>The web interface stores user settings, quotas, task queues and generated media in the
+Operator's local databases and on its local disks. Generated media and uploaded assets are
+retained until you or the Operator deletes them.</li>
+<li>Logs are kept for operations/security and are deleted by the Operator from time to time
+or on request. There is no fixed automatic retention period.</li>
+</ul>
+<h2>5. Do we share or transfer your data?</h2>
+<ul>
+<li><strong>We never sell or rent your data</strong>, and we do not share message content with third
+parties for advertising or profiling.</li>
+<li>To provide a response, your prompt/message may be transmitted <strong>transiently</strong> to the AI
+providers the Operator uses (e.g. DeepSeek's chat API for conversation and vision; the
+search API used by the harness's web-search tool; SauceNAO for image-source lookup; the
+Pixiv API for image lookup; a locally hosted ComfyUI for image/video generation). These
+services process the data only to answer that request. The Operator does not use your
+content to train any machine-learning model.</li>
+<li>The web interface's login flow talks only to Discord's OAuth2 endpoints.</li>
+</ul>
+<h2>6. How is the data protected?</h2>
+<ul>
+<li>The App runs on infrastructure controlled by the Operator; access to credentials,
+databases and logs is limited to the Operator.</li>
+<li>Sensitive outbound content is inspected before being sent to Discord; known credentials
+and credential-shaped strings are replaced rather than published.</li>
+<li>Autonomous AI operations are confined to a dedicated workspace on the Operator's machine.</li>
+<li>Moderation actions (purge/ban) and archive commands are available only to configured
+administrator IDs and require the corresponding Discord permissions.</li>
+</ul>
+<h2>7. Your rights and choices</h2>
+<ul>
+<li><strong>Remove or disable the App</strong>: ask a server administrator to remove the App, or disable its
+features in a channel (server configuration). Users do not need to interact with the App.</li>
+<li><strong>Blacklisted users</strong>: users blacklisted by the Operator are never answered and their
+messages are not stored as memory.</li>
+<li><strong>Deletion requests</strong>: contact the Operator (section 9) to request deletion of your data.
+Administrators can clear conversation memory on demand (<code>/清除</code>), and remove knowledge
+entries (<code>/删除知识</code>).</li>
+<li><strong>Web interface</strong>: you can stop using it at any time and ask the Operator to delete your
+account data, settings, quotas and generated media.</li>
+</ul>
+<h2>8. Children</h2>
+<p>The App is intended for users aged 13+ (or the minimum age required by Discord's Terms of
+Service in your country). We do not knowingly collect data from children below that age.</p>
+<h2>9. Contact</h2>
+<ul>
+<li>Email: <strong>[请填入运营者联系邮箱]</strong></li>
+<li>Discord: <strong>[请填入运营者 Discord 用户名 / 支持服务器链接]</strong></li>
+</ul>
+<h2>10. Changes to this policy</h2>
+<p>We may update this policy from time to time. The &quot;Last updated&quot; date at the top of this page
+reflects the latest revision. Continued use of the App after changes means you accept the
+updated policy.</p>
+<hr>
+<h2>中文摘要</h2>
+<p>机器人 <strong>波旁（美浦波旁）</strong> 仅处理其运行所需的数据：Discord 标识、启用频道中的消息文本
+（文本命令、自由对话、审核/翻译频道）、图片、会话记忆与运行日志、<code>学习</code> 知识库；网站
+bourbon-draw.cn 通过 Discord OAuth2（仅 identify 权限）登录，处理你的设置、生成任务、上传与
+生成媒体。</p>
+<ul>
+<li>数据都保存在<strong>运营者自己的私有服务器</strong>上，不向第三方出售或共享；仅在生成回答/图片/搜索时
+将当次内容<strong>临时</strong>发送给所用 AI/搜索/识图/Pixiv 服务，运营者不用于训练模型。</li>
+<li>会话记忆可用 <code>/清除</code> 重置（旧日志留存于运营者磁盘，不再作为记忆使用），知识可用 <code>/删除知识</code>
+删除；可联系运营者要求删除数据。</li>
+<li>不希望被读取消息的用户可请管理员移除机器人或停用相关频道。</li>
+<li>联系方式见第 9 节。</li>
+</ul>
+
+<footer>Bourbon (美浦波旁) — invite-only Discord application. Not affiliated with Discord or Cygames.</footer>
+</main>
+</body>
+</html>

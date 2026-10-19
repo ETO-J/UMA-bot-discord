@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隐私政策 — Bourbon (美浦波旁)</title>
+<style>
+:root{--bg:#0f1220;--card:#171a2e;--ink:#e8ecff;--dim:#a3aacb;--accent:#7c8cff;--line:#262a44}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif}
+main{max-width:860px;margin:0 auto;padding:44px 22px 70px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.crumb{font-size:13.5px;color:var(--dim);margin-bottom:26px}
+h1{font-size:26px;border-bottom:1px solid var(--line);padding-bottom:10px;margin-top:0}
+h2{font-size:19px;margin-top:34px;padding-top:16px;border-top:1px solid var(--line)}
+h3{font-size:16.5px}
+code{background:#20243d;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:14px}
+pre{background:#20243d;border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto}
+pre code{background:none;border:0;padding:0}
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:14px 0}
+td,th{border:1px solid var(--line);padding:7px 9px;vertical-align:top}
+th{background:#1c2038}
+hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+blockquote{border-left:3px solid var(--accent);margin:14px 0;padding:6px 14px;background:#1a1e36;border-radius:0 10px 10px 0;color:var(--dim)}
+footer{margin-top:40px;color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+<main>
+<div class="crumb"><a href="index.html">&larr; Bourbon (美浦波旁) home</a></div>
+<h1>隐私政策 — 波旁（美浦波旁）Discord 应用</h1>
+<p><em>最后更新：2026-10-19</em></p>
+<p>本隐私政策说明 Discord 应用 <strong>波旁（美浦波旁）</strong>（下称&quot;应用&quot;或&quot;我们&quot;）在你于 Discord 上使用它、
+或使用其网页绘图界面 <strong>bourbon-draw.cn</strong> 时如何处理你的数据。应用由个人开发者/运营者
+（下称&quot;运营者&quot;）运营。</p>
+<p>使用本应用即表示你同意下文所述的处理方式。</p>
+<hr>
+<h2>1. 应用是什么？</h2>
+<p>应用是一个 Discord 多功能 AI 陪伴机器人（仅限邀请加入，只在运营者选择的服务器运行），并附带一个
+可选的浏览器端 AI 图片/视频绘图界面（bourbon-draw.cn）。两者由<strong>同一个 Discord 应用</strong>提供，
+网页端使用 Discord OAuth2 登录，仅申请 <strong>identify</strong> 权限。</p>
+<h2>2. 应用会处理哪些数据？</h2>
+<p><strong>2.1 Discord 机器人</strong></p>
+<ul>
+<li><strong>Discord 标识信息</strong>：你的用户 ID、显示名称/用户名、头像，以及应用所在服务器与频道的 ID。</li>
+<li><strong>消息内容</strong>：应用在其已启用的服务器/频道中能看到的<strong>消息文本</strong>。包括纯文本命令
+（如 <code>/波旁 …</code>、<code>/帮助</code>、<code>/学习 …</code>、<code>/人设列表</code>、<code>/切换人设 …</code>、<code>/今日担当</code>、<code>/识图</code>、
+<code>/涩图</code>，以及管理员命令 <code>/撤回</code>、<code>/长期撤回</code>、<code>/ban</code>、<code>/抓取</code>、<code>/debug</code>、<code>/广播</code>、<code>/清除</code>、
+<code>/重启</code>），应用聊天或审核功能已启用频道中的普通对话，以及服务器管理员配置的审核/自动翻译
+频道。Discord 上开头的 <code>/</code> 可省略。</li>
+<li><strong>图片与附件</strong>：你发送给应用、用于图片理解或 <code>/识图</code> 的图片，以及应用发给你的图片
+（如 <code>/涩图</code>、<code>/今日担当</code>）。</li>
+<li><strong>会话记忆与日志</strong>：每个频道/用户会话最近几轮对话，以及运营者为保证机器人正常运行与排障而
+保留的运行日志（收发消息、功能判定、工具调用记录）。</li>
+<li><strong>知识条目</strong>：用户/管理员通过 <code>/学习</code>（管理员用 <code>/批量学习</code>）教给应用的事实，存于应用的知识库。</li>
+</ul>
+<p><strong>2.2 网页绘图界面（bourbon-draw.cn）</strong></p>
+<ul>
+<li><strong>Discord 账号数据</strong>（OAuth2 仅 identify 权限登录后）：用户 ID、用户名、头像；浏览器中保存
+有效期为 7 天的签名会话令牌。</li>
+<li><strong>你创建的内容</strong>：提示词、负面提示词、工作流/参数设置、上传的源图片或媒体、生成的图片/视频、
+按用户的生成配额，以及（如启用）你的媒体素材库上传内容。</li>
+<li><strong>发布内容</strong>：素材发布功能启用时，已发布作品的缩略图/附件可能由运营者的机器人发布到配置的
+Discord 频道。</li>
+</ul>
+<h2>3. 处理这些数据的目的？</h2>
+<ul>
+<li><strong>对话式 AI</strong>：回答问题、保持上下文连贯、判断是否参与频道自由对话、图片理解。</li>
+<li><strong>知识库</strong>：用服务器专属知识支撑回答。</li>
+<li><strong>命令与实用功能</strong>：人设切换、识图、Pixiv 图片、每日随机角色、定时问候、帮助。</li>
+<li><strong>审核与安全</strong>：陷阱频道垃圾检测、用户黑名单、管理员使用的删除消息/封禁命令。</li>
+<li><strong>管理</strong>：频道历史抓取（<code>/抓取</code>）、重启/清除/debug 命令。</li>
+<li><strong>网页绘图</strong>：登录、记住设置与配额、生成媒体、保存生成历史与素材。</li>
+</ul>
+<h2>4. 数据存储在哪里、保留多久？</h2>
+<ul>
+<li>机器人存储的一切数据都保存在<strong>运营者自己的私有服务器/电脑本地</strong>——会话记录
+（DeepSeek Harness 会话存储）、知识库（FAISS 索引与文本文件）、活动/控制台/sidecar 日志，
+以及仅管理员可用的 <code>/抓取</code> 生成的归档。上述数据<strong>不</strong>由任何第三方代运营者托管。</li>
+<li>会话记录用于提供记忆。服务器管理员可用 <code>/清除</code> 清空会话：这会开启新的会话代数；旧的会话日志
+仍留在运营者磁盘上，直到运营者将其删除，但已不再作为活动记忆使用。知识条目可用 <code>/删除知识</code>
+移除。用户可联系运营者（第 9 节）请求删除数据。</li>
+<li>网页界面在运营者本地数据库与磁盘中保存用户设置、配额、任务队列与生成的媒体。生成的媒体与上传
+的素材保留到你或运营者删除为止。</li>
+<li>日志用于运维/安全，由运营者不定期或应请求删除。没有固定的自动保留期限。</li>
+</ul>
+<h2>5. 我们是否共享或转移你的数据？</h2>
+<ul>
+<li><strong>我们绝不出售或出租你的数据</strong>，也不为广告或用户画像与第三方共享消息内容。</li>
+<li>为生成回复，你给应用的消息/提示词可能会被<strong>临时</strong>发送给运营者使用的 AI 服务商（如用于对话与
+视觉理解的 DeepSeek 对话 API、harness 联网搜索工具所用的搜索 API、用于识图的 SauceNAO、
+用于图片检索的 Pixiv API，以及本地托管的 ComfyUI 图片/视频生成服务）。这些服务仅用于处理
+该次请求。运营者不使用你的内容训练任何机器学习模型。</li>
+<li>网页界面的登录流程仅与 Discord 的 OAuth2 接口通信。</li>
+</ul>
+<h2>6. 数据如何得到保护？</h2>
+<ul>
+<li>应用运行在运营者控制的设备上；凭据、数据库与日志的访问权限仅限运营者。</li>
+<li>敏感出站内容在发送到 Discord 之前会被检查；已知凭据与凭据形态的字符串会被替换，而不是被公开。</li>
+<li>自主 AI 操作被限制在运营者机器上的专用工作区中。</li>
+<li>审核操作（清屏/封禁）与归档命令仅对配置的管理员 ID 开放，且需要对应的 Discord 权限。</li>
+</ul>
+<h2>7. 你的权利与选择</h2>
+<ul>
+<li><strong>移除或停用应用</strong>：请服务器管理员移除应用，或在指定频道停用相关功能（由服务器配置决定）。
+你无需与应程序互动。</li>
+<li><strong>被拉黑的用户</strong>：被运营者加入黑名单的用户永远不会得到回复，其消息也不会被存为记忆。</li>
+<li><strong>删除请求</strong>：联系运营者（第 9 节）请求删除你的数据。管理员也可用 <code>/清除</code> 清空会话记忆、
+用 <code>/删除知识</code> 删除知识条目。</li>
+<li><strong>网页界面</strong>：你可随时停止使用，并请运营者删除你的账号数据、设置、配额与生成的媒体。</li>
+</ul>
+<h2>8. 未成年人</h2>
+<p>应用面向 13 岁及以上用户（或你所在国家/地区 Discord 服务条款规定的最低年龄）。我们不会在
+知情情况下收集低于该年龄儿童的数据。</p>
+<h2>9. 联系方式</h2>
+<ul>
+<li>邮箱：［请填入运营者联系邮箱］</li>
+<li>Discord：［请填入运营者 Discord 用户名 / 支持服务器链接］</li>
+</ul>
+<h2>10. 政策变更</h2>
+<p>我们可能不时更新本政策。本页顶部的&quot;最后更新&quot;日期为最近修订日期。政策变更后继续使用应用即表示
+你接受更新后的条款。</p>
+
+<footer>Bourbon (美浦波旁) — invite-only Discord application. Not affiliated with Discord or Cygames.</footer>
+</main>
+</body>
+</html>

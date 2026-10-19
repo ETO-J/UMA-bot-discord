@@ -74,7 +74,7 @@ Yes
 
 ```
 ⚠️ 填入你发布后的隐私政策真实 URL，例如
-https://eto-j.github.io/UMA-bot-discord/PRIVACY_POLICY.html
+https://eto-j.github.io/UMA-bot-discord/privacy.html
 （仓库 docs/PRIVACY_POLICY.md 已更新为当前架构；发布到 GitHub Pages / 其他公开网址后粘贴链接）
 ```
 
@@ -180,7 +180,7 @@ users may contact the operator (see the privacy policy) to request deletion of t
 
 1. ☐ 发布隐私政策到公开 URL，并替换占位联系方式（草案 `docs/PRIVACY_POLICY.md`；
    推荐用仓库 docs/ 开 GitHub Pages：Settings → Pages → Deploy from branch → master /docs，
-   链接示例 https://eto-j.github.io/UMA-bot-discord/PRIVACY_POLICY.html）
+   链接示例 https://eto-j.github.io/UMA-bot-discord/privacy.html）
 2. ☐ 只勾选 Message Content Intent
 3. ☐ 上传 3–5 张演示截图并填入 Imgur 链接
 4. ☐ 确认 DeepSeek 平台数据设置关闭"使用数据训练"（保证 "No" 答案真实）
