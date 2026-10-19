@@ -2,6 +2,13 @@
 
 基于 [NoneBot2](https://nonebot.dev/) 的 Discord 多功能机器人，以 **美浦波旁**（Mihono Bourbon）角色为交互载体。
 
+> **仓库状态（2026-10）**：本仓库是最初的 Python/NoneBot2 实现，**不是**当前线上运行的机器人。
+> 线上机器人已迁移到基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+> 的合并版（QQ 与 Discord 共用一套 agent 运行时；代码在开发者本地仓库，未包含在此）。
+> 本仓库保留：历史 Python 代码、网页绘图站 `webapp/`（bourbon-draw.cn），以及
+> 公开文档与政策（`docs/PRIVACY_POLICY.md`、`docs/TERMS_OF_SERVICE.md` 等）。
+> 功能的权威说明以线上机器人与 `docs/` 中的验证材料为准。
+
 ## 功能一览
 
 | 模块 | 说明 |

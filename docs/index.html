@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bourbon (美浦波旁) — Discord AI Companion Bot</title>
+<meta name="description" content="Bourbon (美浦波旁) is an invite-only AI companion bot for Discord: chat with memory, server-taught knowledge, image understanding, and practical moderation/admin tools. Optional AI drawing at bourbon-draw.cn.">
+<style>
+  :root{
+    --bg:#0f1220; --card:#171a2e; --ink:#e8ecff; --dim:#a3aacb; --accent:#7c8cff; --line:#262a44;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header,main,footer{max-width:980px;margin:0 auto;padding:0 22px}
+  header{padding-top:56px;padding-bottom:24px}
+  .badge{display:inline-block;font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:3px 10px;margin-bottom:18px}
+  h1{font-size:clamp(26px,4.6vw,40px);line-height:1.15;margin:0 0 12px}
+  .sub{color:var(--dim);max-width:720px;margin:0 0 22px}
+  .cta{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+  .btn{display:inline-block;padding:10px 18px;border-radius:10px;background:var(--accent);color:#fff;font-weight:600}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:26px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 18px 14px}
+  .card h3{margin:0 0 6px;font-size:16px}
+  .card p{margin:0;color:var(--dim);font-size:14.5px}
+  section{margin:34px 0}
+  h2{font-size:20px;margin:0 0 12px}
+  table{width:100%;border-collapse:collapse;font-size:14.5px}
+  td{border-bottom:1px solid var(--line);padding:8px 6px;vertical-align:top}
+  td:first-child{white-space:nowrap;color:var(--dim)}
+  details{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:14px 16px;margin:10px 0}
+  summary{cursor:pointer;font-weight:600}
+  footer{color:var(--dim);font-size:13.5px;border-top:1px solid var(--line);margin-top:44px;padding:22px 22px 46px}
+  .notice{border-left:3px solid var(--accent);padding:8px 14px;background:#1a1e36;border-radius:0 10px 10px 0;color:var(--dim);font-size:14px;margin:16px 0}
+</style>
+</head>
+<body>
+<header>
+  <span class="badge">Invite-only · Discord Application</span>
+  <h1>Bourbon <span style="color:var(--dim)">(美浦波旁)</span><br>AI companion bot for Discord</h1>
+  <p class="sub">
+    A multi-function AI companion and community bot, built on an agent runtime with persistent
+    conversation memory. Add it to a server you manage and talk to it like a companion — or let
+    it keep an eye on moderation. The same Discord application also powers an optional
+    <a href="https://bourbon-draw.cn/">web drawing interface</a>.
+  </p>
+  <div class="cta">
+    <a class="btn" href="https://bourbon-draw.cn/">Open web drawing site</a>
+    <a class="btn ghost" href="https://github.com/ETO-J/UMA-bot-discord">GitHub repository</a>
+    <a class="btn ghost" href="#support">Support</a>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2>What it does</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>💬 AI chat with memory</h3>
+        <p>Talk with <code>波旁 &lt;message&gt;</code> or by @mention. In enabled channels it follows
+        the conversation, decides when to join in, and remembers recent context per channel.</p>
+      </div>
+      <div class="card">
+        <h3>📚 Teach it knowledge</h3>
+        <p>Use <code>/学习</code> to teach server-specific facts; answers can be grounded in that
+        knowledge. Admins can manage entries with <code>/知识列表</code> and <code>/删除知识</code>.</p>
+      </div>
+      <div class="card">
+        <h3>🖼️ Images &amp; utilities</h3>
+        <p>Send an image for understanding, use <code>/识图</code> for source lookup, <code>/涩图</code>
+        for a random Pixiv image, or <code>/今日担当</code> for a daily character.</p>
+      </div>
+      <div class="card">
+        <h3>🛡️ Moderation &amp; admin</h3>
+        <p>Optional trap-channel spam handling, message removal (<code>/撤回</code>,
+        <code>/长期撤回</code>), <code>/ban</code>, and history archiving (<code>/抓取</code>).
+        Only configured administrator IDs can use admin commands.</p>
+      </div>
+      <div class="card">
+        <h3>🎭 Personas &amp; more</h3>
+        <p>Switch its personality with <code>/切换人设</code>, get scheduled greetings, or use
+        <code>/帮助</code> for everything else.</p>
+      </div>
+      <div class="card">
+        <h3>🎨 Web drawing (optional)</h3>
+        <p>Sign in to <a href="https://bourbon-draw.cn/">bourbon-draw.cn</a> with Discord to use an
+        AI image &amp; video generation workspace. Drawing is a web feature — the bot itself does not
+        run a drawing command.</p>
+      </div>
+    </div>
+    <div class="notice">
+      Commands work with or without the leading <code>/</code> on Discord (e.g.
+      <code>波旁 你好</code> = <code>/波旁 你好</code>). Administrator commands include
+      <code>/debug</code>, <code>/广播</code>, <code>/清除</code> and <code>/重启</code>.
+    </div>
+  </section>
+
+  <section>
+    <h2>Commands at a glance</h2>
+    <table>
+      <tr><td><code>/波旁 &lt;message&gt;</code></td><td>Chat with the bot (with memory).</td></tr>
+      <tr><td><code>/帮助</code> (<code>/help</code>, <code>/菜单</code>)</td><td>Show all commands.</td></tr>
+      <tr><td><code>/学习 &lt;fact&gt;</code> · <code>/批量学习</code>* · <code>/知识列表</code>* · <code>/删除知识</code>*</td><td>Teach and manage the knowledge base (*admin).</td></tr>
+      <tr><td><code>/人设列表</code> · <code>/切换人设 &lt;name&gt;</code></td><td>Persona management.</td></tr>
+      <tr><td><code>/识图</code> + image · <code>/涩图 &lt;keyword&gt;</code> · <code>/今日担当</code></td><td>Image utilities.</td></tr>
+      <tr><td><code>/撤回</code>* · <code>/长期撤回</code>* · <code>/ban</code>* · <code>/抓取</code>*</td><td>Discord moderation/admin (*admin).</td></tr>
+      <tr><td><code>/debug</code>* · <code>/广播</code>* · <code>/清除</code>* · <code>/重启</code>*</td><td>Operational commands (*admin).</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Data &amp; safety</h2>
+    <p style="color:var(--dim);font-size:14.5px">
+      The bot is invite-only and reads messages only in servers where its operator has installed it,
+      and only in the enabled channels. Data is stored on the operator's own private server, never
+      sold, and never used to train models. Conversation memory can be cleared with
+      <code>/清除</code>. See the <a href="PRIVACY_POLICY.html">Privacy Policy</a> and
+      <a href="TERMS_OF_SERVICE.html">Terms of Service</a>.
+    </p>
+  </section>
+
+  <section id="support">
+    <h2>Support</h2>
+    <p style="color:var(--dim);font-size:14.5px">
+      Questions, bug reports or data requests:
+      <a href="mailto:[请填入运营者联系邮箱]">[请填入运营者联系邮箱]</a>
+      · Discord: <a href="[请填入支持服务器链接]">[请填入支持服务器链接]</a>
+    </p>
+  </section>
+</main>
+
+<footer>
+  Bourbon (美浦波旁) — invite-only Discord application. Not affiliated with Discord or Cygames.
+  <br>© 2026 the operator. · <a href="PRIVACY_POLICY.html">隐私政策 (EN)</a> ·
+  <a href="PRIVACY_POLICY_zh.html">隐私政策 (中文)</a> ·
+  <a href="TERMS_OF_SERVICE.html">服务条款</a>
+</footer>
+</body>
+</html>
